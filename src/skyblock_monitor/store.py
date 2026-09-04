@@ -1,8 +1,8 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from .models import Account, PeriodReport, Snapshot
+from .models import Account, LiveView, MiningSession, PeriodReport, Snapshot
 
 
 class Store:
@@ -46,6 +46,28 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS snapshots_period
                     ON snapshots(account_id, observed_at);
+                CREATE TABLE IF NOT EXISTS mining_sessions (
+                    id INTEGER PRIMARY KEY,
+                    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    offline_since TEXT
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS one_active_session_per_account
+                    ON mining_sessions(account_id) WHERE ended_at IS NULL;
+                CREATE INDEX IF NOT EXISTS mining_sessions_history
+                    ON mining_sessions(account_id, started_at DESC);
+                CREATE TABLE IF NOT EXISTS live_views (
+                    id INTEGER PRIMARY KEY,
+                    telegram_user_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    account_id INTEGER NOT NULL DEFAULT 0,
+                    started_at TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS active_live_views
+                    ON live_views(active, telegram_user_id);
                 """
             )
 
@@ -124,7 +146,22 @@ class Store:
             ).fetchall()
         if len(rows) < 2:
             return None
-        first, last = self._snapshot(rows[0]), self._snapshot(rows[-1])
+        return self._build_report(self._snapshot(rows[0]), self._snapshot(rows[-1]))
+
+    def live_report(self, account_id: int, start: datetime, end: datetime) -> PeriodReport | None:
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT * FROM snapshots
+                   WHERE account_id=? AND observed_at BETWEEN ? AND ?
+                   ORDER BY observed_at""",
+                (account_id, start.isoformat(), end.isoformat()),
+            ).fetchall()
+        if not rows:
+            return None
+        return self._build_report(self._snapshot(rows[0]), self._snapshot(rows[-1]))
+
+    @staticmethod
+    def _build_report(first: Snapshot, last: Snapshot) -> PeriodReport:
         return PeriodReport(
             start=first,
             end=last,
@@ -135,6 +172,122 @@ class Store:
             glacite_powder=last.glacite_powder - first.glacite_powder,
             purse=last.purse - first.purse,
         )
+
+    def record_presence(
+        self,
+        account_id: int,
+        is_skyblock_online: bool,
+        observed_at: datetime,
+        grace: timedelta = timedelta(minutes=30),
+    ) -> MiningSession | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM mining_sessions WHERE account_id=? AND ended_at IS NULL",
+                (account_id,),
+            ).fetchone()
+            if is_skyblock_online:
+                if row is not None and row["offline_since"] is not None:
+                    offline_since = datetime.fromisoformat(row["offline_since"])
+                    if observed_at - offline_since >= grace:
+                        db.execute(
+                            "UPDATE mining_sessions SET ended_at=? WHERE id=?",
+                            (offline_since.isoformat(), row["id"]),
+                        )
+                        row = None
+                    else:
+                        db.execute("UPDATE mining_sessions SET offline_since=NULL WHERE id=?", (row["id"],))
+                        row = db.execute("SELECT * FROM mining_sessions WHERE id=?", (row["id"],)).fetchone()
+                if row is None:
+                    cursor = db.execute(
+                        "INSERT INTO mining_sessions(account_id, started_at) VALUES (?, ?)",
+                        (account_id, observed_at.isoformat()),
+                    )
+                    row = db.execute("SELECT * FROM mining_sessions WHERE id=?", (cursor.lastrowid,)).fetchone()
+            elif row is not None:
+                if row["offline_since"] is None:
+                    db.execute(
+                        "UPDATE mining_sessions SET offline_since=? WHERE id=?",
+                        (observed_at.isoformat(), row["id"]),
+                    )
+                    row = db.execute("SELECT * FROM mining_sessions WHERE id=?", (row["id"],)).fetchone()
+                else:
+                    offline_since = datetime.fromisoformat(row["offline_since"])
+                    if observed_at - offline_since >= grace:
+                        db.execute(
+                            "UPDATE mining_sessions SET ended_at=? WHERE id=?",
+                            (offline_since.isoformat(), row["id"]),
+                        )
+                        row = db.execute("SELECT * FROM mining_sessions WHERE id=?", (row["id"],)).fetchone()
+        return self._session(row) if row else None
+
+    def active_session(self, account_id: int) -> MiningSession | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM mining_sessions WHERE account_id=? AND ended_at IS NULL",
+                (account_id,),
+            ).fetchone()
+        return self._session(row) if row else None
+
+    def list_sessions(self, telegram_user_id: int, limit: int = 20) -> list[MiningSession]:
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT s.* FROM mining_sessions s
+                   JOIN accounts a ON a.id=s.account_id
+                   WHERE a.telegram_user_id=?
+                   ORDER BY s.started_at DESC LIMIT ?""",
+                (telegram_user_id, limit),
+            ).fetchall()
+        return [self._session(row) for row in rows]
+
+    def get_session(self, session_id: int, telegram_user_id: int) -> MiningSession | None:
+        with self._connect() as db:
+            row = db.execute(
+                """SELECT s.* FROM mining_sessions s
+                   JOIN accounts a ON a.id=s.account_id
+                   WHERE s.id=? AND a.telegram_user_id=?""",
+                (session_id, telegram_user_id),
+            ).fetchone()
+        return self._session(row) if row else None
+
+    def start_live_view(
+        self,
+        telegram_user_id: int,
+        chat_id: int,
+        message_id: int,
+        account_id: int,
+        started_at: datetime,
+    ) -> LiveView:
+        with self._connect() as db:
+            db.execute("UPDATE live_views SET active=0 WHERE telegram_user_id=?", (telegram_user_id,))
+            cursor = db.execute(
+                """INSERT INTO live_views(telegram_user_id, chat_id, message_id, account_id, started_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (telegram_user_id, chat_id, message_id, account_id, started_at.isoformat()),
+            )
+            row = db.execute("SELECT * FROM live_views WHERE id=?", (cursor.lastrowid,)).fetchone()
+        return self._live_view(row)
+
+    def get_live_view(self, view_id: int, telegram_user_id: int) -> LiveView | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM live_views WHERE id=? AND telegram_user_id=?",
+                (view_id, telegram_user_id),
+            ).fetchone()
+        return self._live_view(row) if row else None
+
+    def list_active_live_views(self) -> list[LiveView]:
+        with self._connect() as db:
+            rows = db.execute("SELECT * FROM live_views WHERE active=1 ORDER BY id").fetchall()
+        return [self._live_view(row) for row in rows]
+
+    def stop_live_view(self, view_id: int, telegram_user_id: int | None = None) -> None:
+        query = "UPDATE live_views SET active=0 WHERE id=?"
+        params: tuple[object, ...] = (view_id,)
+        if telegram_user_id is not None:
+            query += " AND telegram_user_id=?"
+            params = (view_id, telegram_user_id)
+        with self._connect() as db:
+            db.execute(query, params)
 
     def latest_snapshot(self, account_id: int) -> Snapshot | None:
         with self._connect() as db:
@@ -163,4 +316,25 @@ class Store:
             glacite_powder=row["glacite_powder"],
             purse=row["purse"],
             skyblock_level=row["skyblock_level"],
+        )
+
+    @staticmethod
+    def _session(row: sqlite3.Row) -> MiningSession:
+        return MiningSession(
+            id=row["id"],
+            account_id=row["account_id"],
+            started_at=datetime.fromisoformat(row["started_at"]),
+            ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+            offline_since=datetime.fromisoformat(row["offline_since"]) if row["offline_since"] else None,
+        )
+
+    @staticmethod
+    def _live_view(row: sqlite3.Row) -> LiveView:
+        return LiveView(
+            id=row["id"],
+            telegram_user_id=row["telegram_user_id"],
+            chat_id=row["chat_id"],
+            message_id=row["message_id"],
+            account_id=row["account_id"],
+            started_at=datetime.fromisoformat(row["started_at"]),
         )

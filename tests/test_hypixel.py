@@ -1,4 +1,4 @@
-from skyblock_monitor.hypixel import extract_snapshot
+from skyblock_monitor.hypixel import extract_snapshot, is_skyblock_online
 
 
 def test_extracts_stats_without_inventory_or_fuel():
@@ -42,3 +42,9 @@ def test_missing_optional_powders_are_zero():
     assert snapshot.mithril_powder == 0
     assert snapshot.gemstone_powder == 0
     assert snapshot.glacite_powder == 0
+
+
+def test_only_skyblock_presence_counts_as_farming_online():
+    assert is_skyblock_online({"online": True, "gameType": "SKYBLOCK", "mode": "mining_3"}) is True
+    assert is_skyblock_online({"online": True, "gameType": "BEDWARS"}) is False
+    assert is_skyblock_online({"online": False}) is False

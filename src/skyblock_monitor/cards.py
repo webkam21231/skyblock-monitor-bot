@@ -153,7 +153,7 @@ def draw_metric(
     draw.text((x1 + 34, y1 + 47), value, font=font(29, True), fill=color_for(delta))
 
 
-def render_progress_card(rows: list[tuple[Account, PeriodReport]]) -> bytes:
+def render_progress_card(rows: list[tuple[Account, PeriodReport]], *, live: bool = False) -> bytes:
     if not rows:
         raise ValueError("At least one report is required")
     height = 320 + len(rows) * 500
@@ -163,6 +163,10 @@ def render_progress_card(rows: list[tuple[Account, PeriodReport]]) -> bytes:
     _draw_pickaxe(draw, (82, 74))
     draw.text((194, 76), "CRYSTAL HOLLOWS  /  MINING LOG", font=font(23, True), fill="#66e2ff")
     draw.text((194, 112), "Отчёт по майнингу", font=font(45, True), fill="#f7f8ff")
+    if live:
+        draw.ellipse((884, 79, 908, 103), fill="#ff4d68")
+        draw.polygon(_cut_points((922, 72, 1098, 112), 10), fill="#5a1725", outline="#ff4d68", width=2)
+        draw.text((948, 79), "LIVE", font=font(22, True), fill="#ff8294")
     period_start = min(report.start.observed_at for _, report in rows).astimezone(MOSCOW)
     period_end = max(report.end.observed_at for _, report in rows).astimezone(MOSCOW)
     period = f"{period_start:%d.%m.%Y %H:%M} — {period_end:%d.%m.%Y %H:%M} МСК"

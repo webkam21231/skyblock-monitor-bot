@@ -51,6 +51,10 @@ def extract_snapshot(account_id: int, member: dict, player: dict) -> Snapshot:
     )
 
 
+def is_skyblock_online(session: dict) -> bool:
+    return bool(session.get("online")) and session.get("gameType") == "SKYBLOCK"
+
+
 class HypixelClient:
     def __init__(self, api_key: str):
         self.headers = {"API-Key": api_key, "User-Agent": "skyblock-monitor-bot/0.1"}
@@ -78,3 +82,9 @@ class HypixelClient:
         if member is None:
             raise ValueError("Player is not a member of this profile")
         return extract_snapshot(account_id, member, player_response.json().get("player") or {})
+
+    async def fetch_status(self, uuid: str) -> dict:
+        async with httpx.AsyncClient(timeout=20, headers=self.headers) as client:
+            response = await client.get("https://api.hypixel.net/v2/status", params={"uuid": uuid})
+        response.raise_for_status()
+        return response.json().get("session") or {"online": False}

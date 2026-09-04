@@ -25,7 +25,8 @@ from aiogram.types import (
 )
 
 from .cards import render_menu_card, render_progress_card
-from .hypixel import HypixelClient
+from .hypixel import HypixelClient, is_skyblock_online
+from .models import LiveView
 from .presentation import MOSCOW, format_report, parse_custom_period
 from .store import Store
 
@@ -46,6 +47,8 @@ class CustomPeriod(StatesGroup):
 
 def main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔴 Прямой эфир", callback_data="live:0")],
+        [InlineKeyboardButton(text="🗂 Сессии", callback_data="sessions")],
         [InlineKeyboardButton(text="📈 Все аккаунты", callback_data="all")],
         [InlineKeyboardButton(text="➕ Добавить аккаунт", callback_data="add")],
         [InlineKeyboardButton(text="👥 Мои аккаунты", callback_data="accounts")],
@@ -61,6 +64,7 @@ def account_keyboard(account_id: int) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text=label, callback_data=f"period:{account_id}:{code}")
                      for label, code in periods[index:index + 3]])
     rows.extend([
+        [InlineKeyboardButton(text="🔴 Прямой эфир", callback_data=f"live:{account_id}")],
         [InlineKeyboardButton(text="🗓 Произвольный период", callback_data=f"custom:{account_id}")],
         [InlineKeyboardButton(text="🔄 Обновить сейчас", callback_data=f"refresh:{account_id}")],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete:{account_id}"),
@@ -82,6 +86,20 @@ def all_accounts_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="home")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def live_keyboard(view_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏹ Остановить эфир", callback_data=f"live-stop:{view_id}")],
+        [InlineKeyboardButton(text="🗂 Сессии", callback_data=f"live-sessions:{view_id}")],
+    ])
+
+
+def session_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ К сессиям", callback_data="sessions")],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="home")],
+    ])
 
 
 def current_text(account, snapshot) -> str:
@@ -201,6 +219,157 @@ async def show_account(query: CallbackQuery) -> None:
     await query.answer()
 
 
+def scoped_accounts(user_id: int, account_id: int):
+    if account_id == 0:
+        return store.list_accounts(user_id)
+    account = store.get_account(account_id, user_id)
+    return [account] if account else []
+
+
+def live_rows(view: LiveView, end_at: datetime):
+    rows = []
+    for account in scoped_accounts(view.telegram_user_id, view.account_id):
+        report = store.live_report(account.id, view.started_at, end_at)
+        if report:
+            rows.append((account, report))
+    return rows
+
+
+async def update_live_message(bot: Bot, view: LiveView, *, live: bool = True) -> bool:
+    rows = live_rows(view, datetime.now(UTC))
+    if not rows:
+        return False
+    caption = (
+        f"🔴 <b>Прямой эфир</b> · старт {view.started_at.astimezone(MOSCOW):%d.%m %H:%M} МСК\n"
+        "Карточка автоматически обновляется каждые 2 минуты."
+        if live
+        else "⏹ <b>Прямой эфир остановлен.</b> Итог сохранён на карточке."
+    )
+    media = InputMediaPhoto(
+        media=BufferedInputFile(render_progress_card(rows, live=live), filename="skyblock-live.png"),
+        caption=caption,
+    )
+    keyboard = live_keyboard(view.id) if live else main_keyboard()
+    await bot.edit_message_media(chat_id=view.chat_id, message_id=view.message_id, media=media, reply_markup=keyboard)
+    return True
+
+
+@router.callback_query(F.data.startswith("live:"))
+async def start_live(query: CallbackQuery, bot: Bot) -> None:
+    account_id = int(query.data.split(":")[1])
+    accounts_list = scoped_accounts(query.from_user.id, account_id)
+    if not accounts_list:
+        await query.answer("Нет доступных аккаунтов", show_alert=True)
+        return
+    if not query.message.photo:
+        await query.answer("Отправь /start и открой эфир из нового меню", show_alert=True)
+        return
+    await query.answer("Фиксирую начальные значения…")
+    started_at = datetime.now(UTC)
+    saved = 0
+    for account in accounts_list:
+        try:
+            snapshot = await hypixel.fetch(account.id, account.uuid, account.profile_name)
+            store.save_snapshot(snapshot)
+            saved += 1
+            try:
+                status = await hypixel.fetch_status(account.uuid)
+                store.record_presence(account.id, is_skyblock_online(status), snapshot.observed_at)
+            except httpx.HTTPError:
+                log.exception("Failed to fetch status for %s", account.username)
+        except (httpx.HTTPError, ValueError, KeyError):
+            log.exception("Failed to start live view for %s/%s", account.username, account.profile_name)
+    if saved == 0:
+        await edit_screen(query.message, "Не удалось получить начальные данные.", main_keyboard())
+        return
+    view = store.start_live_view(
+        query.from_user.id,
+        query.message.chat.id,
+        query.message.message_id,
+        account_id,
+        started_at,
+    )
+    await update_live_message(bot, view)
+
+
+@router.callback_query(F.data.startswith("live-stop:"))
+async def stop_live(query: CallbackQuery, bot: Bot) -> None:
+    view_id = int(query.data.split(":")[1])
+    view = store.get_live_view(view_id, query.from_user.id)
+    if view is None:
+        await query.answer("Эфир не найден", show_alert=True)
+        return
+    store.stop_live_view(view.id, query.from_user.id)
+    await update_live_message(bot, view, live=False)
+    await query.answer("Эфир остановлен")
+
+
+async def show_sessions_screen(message: Message, user_id: int) -> None:
+    sessions_list = store.list_sessions(user_id)
+    if not sessions_list:
+        await edit_screen(
+            message,
+            "Сессий пока нет. Они начнут записываться, когда аккаунт появится в SkyBlock.",
+            main_keyboard(),
+        )
+        return
+    rows = []
+    for session in sessions_list:
+        account = store.get_account(session.account_id, user_id)
+        if account is None:
+            continue
+        icon = "🔴" if session.ended_at is None and session.offline_since is None else "🟠" if session.ended_at is None else "✅"
+        started = session.started_at.astimezone(MOSCOW).strftime("%d.%m %H:%M")
+        rows.append([InlineKeyboardButton(text=f"{icon} {account.username} · {started}", callback_data=f"session:{session.id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Главное меню", callback_data="home")])
+    await edit_screen(
+        message,
+        "<b>Игровые сессии</b>\n🔴 онлайн · 🟠 ждём возвращения · ✅ завершена",
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data == "sessions")
+async def sessions(query: CallbackQuery) -> None:
+    await show_sessions_screen(query.message, query.from_user.id)
+    await query.answer()
+
+
+@router.callback_query(F.data.startswith("live-sessions:"))
+async def stop_live_and_show_sessions(query: CallbackQuery) -> None:
+    view_id = int(query.data.split(":")[1])
+    store.stop_live_view(view_id, query.from_user.id)
+    await show_sessions_screen(query.message, query.from_user.id)
+    await query.answer("Эфир остановлен")
+
+
+@router.callback_query(F.data.startswith("session:"))
+async def show_session(query: CallbackQuery) -> None:
+    session_id = int(query.data.split(":")[1])
+    session = store.get_session(session_id, query.from_user.id)
+    if session is None:
+        await query.answer("Сессия не найдена", show_alert=True)
+        return
+    account = store.get_account(session.account_id, query.from_user.id)
+    end_at = session.ended_at or datetime.now(UTC)
+    report = store.live_report(session.account_id, session.started_at, end_at)
+    if account is None or report is None:
+        await query.answer("Для этой сессии пока недостаточно данных", show_alert=True)
+        return
+    media = InputMediaPhoto(
+        media=BufferedInputFile(render_progress_card([(account, report)], live=session.ended_at is None), filename="session.png"),
+        caption=(
+            "🔴 <b>Сессия идёт</b>"
+            if session.ended_at is None and session.offline_since is None
+            else "🟠 <b>Аккаунт вышел — ждём 30 минут</b>"
+            if session.ended_at is None
+            else "✅ <b>Завершённая игровая сессия</b>"
+        ),
+    )
+    await query.message.edit_media(media, reply_markup=session_keyboard())
+    await query.answer()
+
+
 async def send_report(message: Message, user_id: int, account_id: int, start_at: datetime, end_at: datetime) -> None:
     accounts_list = store.list_accounts(user_id) if account_id == 0 else []
     if account_id != 0:
@@ -283,11 +452,31 @@ async def poll_forever() -> None:
         started = datetime.now(UTC)
         for account in store.list_accounts():
             try:
-                store.save_snapshot(await hypixel.fetch(account.id, account.uuid, account.profile_name))
+                snapshot = await hypixel.fetch(account.id, account.uuid, account.profile_name)
+                store.save_snapshot(snapshot)
             except (httpx.HTTPError, ValueError, KeyError):
                 log.exception("Failed to update %s/%s", account.username, account.profile_name)
+                continue
+            try:
+                status = await hypixel.fetch_status(account.uuid)
+                store.record_presence(account.id, is_skyblock_online(status), snapshot.observed_at)
+            except httpx.HTTPError:
+                log.exception("Failed to update online status for %s", account.username)
         elapsed = (datetime.now(UTC) - started).total_seconds()
         await asyncio.sleep(max(1, 60 - elapsed))
+
+
+async def live_forever(bot: Bot) -> None:
+    while True:
+        await asyncio.sleep(120)
+        for view in store.list_active_live_views():
+            try:
+                await update_live_message(bot, view)
+            except TelegramBadRequest as exc:
+                log.warning("Stopping live view %s after Telegram edit failure: %s", view.id, exc)
+                store.stop_live_view(view.id)
+            except Exception:
+                log.exception("Failed to update live view %s", view.id)
 
 
 async def run() -> None:
@@ -301,10 +490,12 @@ async def run() -> None:
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.include_router(router)
     poller = asyncio.create_task(poll_forever())
+    live_updater = asyncio.create_task(live_forever(bot))
     try:
         await dispatcher.start_polling(bot)
     finally:
         poller.cancel()
+        live_updater.cancel()
         await bot.session.close()
 
 

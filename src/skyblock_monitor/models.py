@@ -37,3 +37,22 @@ class PeriodReport:
     gemstone_powder: int
     glacite_powder: int
     purse: float
+
+
+@dataclass(frozen=True)
+class MiningSession:
+    id: int
+    account_id: int
+    started_at: datetime
+    ended_at: datetime | None
+    offline_since: datetime | None
+
+
+@dataclass(frozen=True)
+class LiveView:
+    id: int
+    telegram_user_id: int
+    chat_id: int
+    message_id: int
+    account_id: int
+    started_at: datetime

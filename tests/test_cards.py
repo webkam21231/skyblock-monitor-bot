@@ -63,3 +63,14 @@ def test_header_has_pickaxe_icon():
     metal_pixels = sum(1 for red, green, blue in icon.get_flattened_data() if red > 180 and green > 190 and blue > 195)
     assert handle_pixels >= 80
     assert metal_pixels >= 80
+
+
+def test_live_card_has_red_on_air_indicator():
+    account = Account(1, 7, "Hunter_sssss", "uuid", "Grapes")
+    image = Image.open(
+        BytesIO(render_progress_card([(account, report(1, mining=25_000, commissions=2, powder=500))], live=True))
+    )
+    header = image.crop((820, 60, 1110, 160))
+
+    red_pixels = sum(1 for red, green, blue in header.get_flattened_data() if red > 190 and green < 100 and blue < 120)
+    assert red_pixels >= 100
