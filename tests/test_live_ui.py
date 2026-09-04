@@ -1,4 +1,7 @@
-from skyblock_monitor.bot import account_keyboard, live_keyboard, main_keyboard
+from datetime import UTC, datetime
+
+from skyblock_monitor.bot import account_keyboard, is_message_not_modified, live_caption, live_keyboard, main_keyboard
+from skyblock_monitor.models import LiveView
 
 
 def callback_values(keyboard) -> set[str]:
@@ -18,3 +21,15 @@ def test_account_menu_can_start_account_only_live_view():
 def test_live_screen_can_be_stopped_without_new_message():
     keyboard = live_keyboard(9)
     assert "live-stop:9" in callback_values(keyboard)
+
+
+def test_live_caption_shows_refresh_time():
+    view = LiveView(1, 7, 100, 200, 0, datetime(2026, 9, 4, 19, 10, tzinfo=UTC))
+    now = datetime(2026, 9, 4, 19, 12, tzinfo=UTC)
+
+    assert "обновлено 04.09 22:12 МСК" in live_caption(view, now, live=True)
+
+
+def test_not_modified_error_does_not_end_live_view():
+    assert is_message_not_modified(RuntimeError("Bad Request: message is not modified")) is True
+    assert is_message_not_modified(RuntimeError("Bad Request: message to edit not found")) is False

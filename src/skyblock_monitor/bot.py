@@ -235,16 +235,27 @@ def live_rows(view: LiveView, end_at: datetime):
     return rows
 
 
+def live_caption(view: LiveView, now: datetime, *, live: bool) -> str:
+    if not live:
+        return "⏹ <b>Прямой эфир остановлен.</b> Итог сохранён на карточке."
+    started = view.started_at.astimezone(MOSCOW).strftime("%d.%m %H:%M")
+    updated = now.astimezone(MOSCOW).strftime("%d.%m %H:%M")
+    return (
+        f"🔴 <b>Прямой эфир</b> · старт {started} МСК\n"
+        f"Обновление каждые 2 минуты · обновлено {updated} МСК"
+    )
+
+
+def is_message_not_modified(exc: Exception) -> bool:
+    return "message is not modified" in str(exc).lower()
+
+
 async def update_live_message(bot: Bot, view: LiveView, *, live: bool = True) -> bool:
-    rows = live_rows(view, datetime.now(UTC))
+    now = datetime.now(UTC)
+    rows = live_rows(view, now)
     if not rows:
         return False
-    caption = (
-        f"🔴 <b>Прямой эфир</b> · старт {view.started_at.astimezone(MOSCOW):%d.%m %H:%M} МСК\n"
-        "Карточка автоматически обновляется каждые 2 минуты."
-        if live
-        else "⏹ <b>Прямой эфир остановлен.</b> Итог сохранён на карточке."
-    )
+    caption = live_caption(view, now, live=live)
     media = InputMediaPhoto(
         media=BufferedInputFile(render_progress_card(rows, live=live), filename="skyblock-live.png"),
         caption=caption,
@@ -473,6 +484,8 @@ async def live_forever(bot: Bot) -> None:
             try:
                 await update_live_message(bot, view)
             except TelegramBadRequest as exc:
+                if is_message_not_modified(exc):
+                    continue
                 log.warning("Stopping live view %s after Telegram edit failure: %s", view.id, exc)
                 store.stop_live_view(view.id)
             except Exception:
