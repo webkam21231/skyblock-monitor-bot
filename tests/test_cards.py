@@ -44,3 +44,22 @@ def test_background_has_visible_skyblock_cavern_color():
         1 for red, green, blue in image.get_flattened_data() if max(red, green, blue) - min(red, green, blue) >= 45
     )
     assert saturated / (image.width * image.height) >= 0.08
+
+
+def test_background_contains_stone_walls():
+    account = Account(1, 7, "VenomKillerIRL", "uuid", "Papaya")
+    image = Image.open(BytesIO(render_progress_card([(account, report(1, mining=25_000, commissions=2, powder=500))])))
+
+    stone_pixels = sum(1 for pixel in image.get_flattened_data() if pixel in {(20, 37, 50), (26, 45, 58), (17, 34, 46)})
+    assert stone_pixels >= 5_000
+
+
+def test_header_has_pickaxe_icon():
+    account = Account(1, 7, "VenomKillerIRL", "uuid", "Papaya")
+    image = Image.open(BytesIO(render_progress_card([(account, report(1, mining=25_000, commissions=2, powder=500))])))
+    icon = image.crop((75, 68, 180, 178))
+
+    handle_pixels = sum(1 for red, green, blue in icon.get_flattened_data() if red > 100 and 45 < green < 150 and blue < 100)
+    metal_pixels = sum(1 for red, green, blue in icon.get_flattened_data() if red > 180 and green > 190 and blue > 195)
+    assert handle_pixels >= 80
+    assert metal_pixels >= 80

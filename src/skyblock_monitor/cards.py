@@ -26,6 +26,31 @@ def color_for(value: float) -> str:
     return "#a9acc0"
 
 
+def _cut_points(box: tuple[int, int, int, int], cut: int = 18) -> list[tuple[int, int]]:
+    x1, y1, x2, y2 = box
+    return [
+        (x1 + cut, y1),
+        (x2 - cut, y1),
+        (x2, y1 + cut),
+        (x2, y2 - cut),
+        (x2 - cut, y2),
+        (x1 + cut, y2),
+        (x1, y2 - cut),
+        (x1, y1 + cut),
+    ]
+
+
+def _draw_pickaxe(draw: ImageDraw.ImageDraw, origin: tuple[int, int]) -> None:
+    x, y = origin
+    draw.polygon(_cut_points((x, y, x + 88, y + 88), 13), fill="#0b1b27", outline="#168ca8", width=3)
+    draw.line((x + 29, y + 67, x + 59, y + 30), fill="#8b6840", width=10)
+    draw.line((x + 31, y + 66, x + 61, y + 29), fill="#b0854e", width=4)
+    draw.line((x + 29, y + 28, x + 68, y + 30), fill="#dceaf0", width=9)
+    draw.line((x + 24, y + 33, x + 31, y + 27), fill="#dceaf0", width=7)
+    draw.line((x + 67, y + 30, x + 73, y + 38), fill="#dceaf0", width=7)
+    draw.line((x + 33, y + 27, x + 63, y + 29), fill="#5be7ff", width=2)
+
+
 def _background(height: int) -> Image.Image:
     image = Image.new("RGBA", (WIDTH, height), "#07101e")
     draw = ImageDraw.Draw(image)
@@ -46,10 +71,16 @@ def _background(height: int) -> Image.Image:
 
     details = Image.new("RGBA", image.size, (0, 0, 0, 0))
     detail_draw = ImageDraw.Draw(details)
-    for x in range(40, WIDTH, 80):
-        detail_draw.line((x, 0, x, height), fill=(113, 167, 255, 12), width=1)
-    for y in range(40, height, 80):
-        detail_draw.line((0, y, WIDTH, y), fill=(113, 167, 255, 10), width=1)
+    left_wall = [(0, 0), (238, 0), (188, 150), (229, 300), (154, 460), (206, 650), (125, 830), (170, 1040), (88, height), (0, height)]
+    right_wall = [(1200, 0), (1012, 0), (1062, 165), (1004, 328), (1068, 500), (1018, 710), (1080, 905), (1028, height), (1200, height)]
+    detail_draw.polygon(left_wall, fill="#142532")
+    detail_draw.polygon(right_wall, fill="#11222e")
+    detail_draw.polygon([(0, 0), (128, 0), (92, 220), (166, 410), (76, 610), (0, 650)], fill="#1a2d3a")
+    detail_draw.polygon([(1200, 80), (1105, 0), (1070, 245), (1130, 420), (1055, 650), (1200, 720)], fill="#1a2d3a")
+    detail_draw.polygon([(0, height - 128), (245, height - 176), (430, height - 108), (690, height - 155), (910, height - 90), (1200, height - 145), (1200, height), (0, height)], fill="#0b171f")
+    detail_draw.line([(26, 260), (94, 314), (68, 367), (177, 426)], fill=(22, 140, 168, 155), width=4)
+    detail_draw.line([(1175, 585), (1100, 644), (1132, 706), (1032, 778)], fill=(155, 123, 57, 150), width=4)
+    detail_draw.line([(128, height - 42), (225, height - 112), (332, height - 84), (402, height - 139)], fill=(22, 140, 168, 130), width=3)
 
     rng = random.Random(326)
     palette = [(72, 217, 255, 150), (150, 104, 255, 150), (255, 185, 72, 130)]
@@ -82,9 +113,12 @@ def _panel(image: Image.Image, box: tuple[int, int, int, int], radius: int = 30,
     layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
     x1, y1, x2, y2 = box
-    draw.rounded_rectangle((x1 + 8, y1 + 12, x2 + 8, y2 + 12), radius=radius, fill=(0, 0, 0, 92))
-    draw.rounded_rectangle(box, radius=radius, fill=(9, 13, 27, 218), outline=(105, 124, 180, 105), width=2)
-    draw.rounded_rectangle((x1, y1, x1 + 8, y2), radius=4, fill=accent)
+    cut = min(22, radius)
+    shadow = [(px + 8, py + 12) for px, py in _cut_points(box, cut)]
+    draw.polygon(shadow, fill=(0, 0, 0, 105))
+    draw.polygon(_cut_points(box, cut), fill=(10, 20, 29, 232), outline=(45, 75, 93, 220), width=3)
+    draw.line((x1 + cut, y1 + 2, x2 - 92, y1 + 2), fill=accent, width=5)
+    draw.line((x1 + 2, y1 + cut, x1 + 2, y2 - 48), fill=accent, width=4)
     image.alpha_composite(layer)
 
 
@@ -92,8 +126,9 @@ def render_menu_card() -> bytes:
     image = _background(620)
     _panel(image, (65, 62, 1135, 558), radius=38, accent="#42d9ff")
     draw = ImageDraw.Draw(image)
-    draw.text((110, 105), "SKYBLOCK MONITOR", font=font(28, True), fill="#66e2ff")
-    draw.text((110, 165), "Mining Progress", font=font(64, True), fill="#f7f8ff")
+    _draw_pickaxe(draw, (100, 94))
+    draw.text((215, 105), "SKYBLOCK MONITOR", font=font(28, True), fill="#66e2ff")
+    draw.text((215, 155), "Mining Progress", font=font(60, True), fill="#f7f8ff")
     draw.text((110, 255), "Живая статистика твоих шахтёров", font=font(30), fill="#b9bed4")
     draw.rounded_rectangle((110, 350, 1090, 492), radius=26, fill=(13, 20, 39, 235), outline="#44547d", width=2)
     draw.text((150, 382), "MINING  •  HOTM  •  POWDER  •  PURSE", font=font(29, True), fill="#80f2b8")
@@ -111,9 +146,9 @@ def draw_metric(
     delta: float,
     accent: str,
 ) -> None:
-    draw.rounded_rectangle(box, radius=18, fill=(14, 20, 37, 235), outline=(86, 101, 145, 130), width=2)
+    draw.polygon(_cut_points(box, 13), fill=(20, 34, 48, 245), outline=(45, 75, 93, 230), width=2)
     x1, y1, _, _ = box
-    draw.rounded_rectangle((x1 + 15, y1 + 17, x1 + 21, y1 + 67), radius=3, fill=accent)
+    draw.line((x1 + 17, y1 + 20, x1 + 17, y1 + 63), fill=accent, width=6)
     draw.text((x1 + 34, y1 + 15), label, font=font(19), fill="#9ea7c4")
     draw.text((x1 + 34, y1 + 47), value, font=font(29, True), fill=color_for(delta))
 
@@ -125,13 +160,14 @@ def render_progress_card(rows: list[tuple[Account, PeriodReport]]) -> bytes:
     image = _background(height)
     _panel(image, (58, 46, 1142, 222), radius=32, accent="#a06bff")
     draw = ImageDraw.Draw(image)
-    draw.text((95, 76), "CRYSTAL HOLLOWS  /  MINING LOG", font=font(23, True), fill="#66e2ff")
-    draw.text((95, 112), "Отчёт по майнингу", font=font(48, True), fill="#f7f8ff")
+    _draw_pickaxe(draw, (82, 74))
+    draw.text((194, 76), "CRYSTAL HOLLOWS  /  MINING LOG", font=font(23, True), fill="#66e2ff")
+    draw.text((194, 112), "Отчёт по майнингу", font=font(45, True), fill="#f7f8ff")
     period_start = min(report.start.observed_at for _, report in rows).astimezone(MOSCOW)
     period_end = max(report.end.observed_at for _, report in rows).astimezone(MOSCOW)
     period = f"{period_start:%d.%m.%Y %H:%M} — {period_end:%d.%m.%Y %H:%M} МСК"
-    draw.rounded_rectangle((93, 174, 610, 207), radius=15, fill=(27, 37, 65, 230))
-    draw.text((110, 179), period, font=font(19), fill="#c2c8dc")
+    draw.polygon(_cut_points((194, 174, 711, 207), 9), fill=(27, 37, 65, 230))
+    draw.text((211, 179), period, font=font(19), fill="#c2c8dc")
 
     accents = ["#42d9ff", "#a06bff", "#ffb84a", "#45e7b0"]
     for index, (account, report) in enumerate(rows):
