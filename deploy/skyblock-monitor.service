@@ -1,0 +1,22 @@
+[Unit]
+Description=SkyBlock Telegram monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=skyblock-monitor
+Group=skyblock-monitor
+WorkingDirectory=/opt/skyblock-monitor
+EnvironmentFile=/etc/skyblock-monitor.env
+ExecStart=/opt/skyblock-monitor/.venv/bin/skyblock-monitor
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/skyblock-monitor
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
