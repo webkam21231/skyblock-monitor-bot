@@ -34,3 +34,13 @@ def test_renders_all_accounts_on_one_image():
 
     assert image.width == 1200
     assert image.height >= 1_100
+
+
+def test_background_has_visible_skyblock_cavern_color():
+    account = Account(1, 7, "VenomKillerIRL", "uuid", "Papaya")
+    image = Image.open(BytesIO(render_progress_card([(account, report(1, mining=25_000, commissions=2, powder=500))])))
+
+    saturated = sum(
+        1 for red, green, blue in image.get_flattened_data() if max(red, green, blue) - min(red, green, blue) >= 45
+    )
+    assert saturated / (image.width * image.height) >= 0.08
