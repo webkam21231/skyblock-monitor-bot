@@ -94,3 +94,13 @@ def test_starting_live_view_replaces_previous_view_for_user(tmp_path):
     assert store.get_live_view(second.id, 7).message_id == 201
     store.stop_live_view(second.id, 7)
     assert store.list_active_live_views() == []
+
+
+def test_live_view_remembers_selected_card_page(tmp_path):
+    store = Store(tmp_path / "bot.db")
+    now = datetime(2026, 9, 4, 10, tzinfo=UTC)
+    view = store.start_live_view(7, 100, 200, 0, now)
+
+    store.set_live_page(view.id, 1, 7)
+
+    assert store.get_live_view(view.id, 7).current_page == 1

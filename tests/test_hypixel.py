@@ -1,4 +1,10 @@
-from skyblock_monitor.hypixel import extract_snapshot, is_skyblock_online
+from skyblock_monitor.hypixel import (
+    HOTM_XP_COSTS,
+    MINING_XP_COSTS,
+    extract_snapshot,
+    is_skyblock_online,
+    level_progress,
+)
 
 
 def test_extracts_stats_without_inventory_or_fuel():
@@ -45,6 +51,25 @@ def test_missing_optional_powders_are_zero():
 
 
 def test_only_skyblock_presence_counts_as_farming_online():
-    assert is_skyblock_online({"online": True, "gameType": "SKYBLOCK", "mode": "mining_3"}) is True
-    assert is_skyblock_online({"online": True, "gameType": "BEDWARS"}) is False
-    assert is_skyblock_online({"online": False}) is False
+    assert is_skyblock_online({"online": True, "gameType": "SKYBLOCK"}) is True
+    assert is_skyblock_online({"online": True, "gameType": "LOBBY"}) is False
+    assert is_skyblock_online({"online": False, "gameType": "SKYBLOCK"}) is False
+
+
+def test_mining_progress_returns_remaining_xp_and_percent():
+    progress = level_progress(12_987_654, MINING_XP_COSTS)
+
+    assert progress.level == 33
+    assert progress.next_level == 34
+    assert progress.remaining == 834_771
+    assert progress.percent == 47.8
+    assert progress.remaining_percent == 52.2
+
+
+def test_hotm_progress_returns_remaining_xp_and_percent():
+    progress = level_progress(58_765, HOTM_XP_COSTS)
+
+    assert progress.level == 4
+    assert progress.next_level == 5
+    assert progress.remaining == 38_235
+    assert progress.percent == 36.3

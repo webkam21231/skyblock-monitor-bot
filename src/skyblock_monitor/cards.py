@@ -6,10 +6,13 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from .hypixel import HOTM_XP_COSTS, MINING_XP_COSTS, LevelProgress, level_progress
 from .models import Account, PeriodReport
 from .presentation import MOSCOW, signed
 
 WIDTH = 1200
+CARD_HEIGHT = 900
+MAX_ACCOUNTS_PER_CARD = 4
 FONT_REGULAR = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 FONT_BOLD = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
 
@@ -24,6 +27,39 @@ def color_for(value: float) -> str:
     if value < 0:
         return "#ff7995"
     return "#a9acc0"
+
+
+def format_number(value: float) -> str:
+    return f"{value:,.0f}".replace(",", " ")
+
+
+def _text_top(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    *,
+    text_font: ImageFont.FreeTypeFont,
+    fill: str,
+    align: str = "left",
+) -> None:
+    """Draw using the visible glyph top, not Pillow's font ascender offset."""
+    x, y = xy
+    bbox = draw.textbbox((0, 0), text, font=text_font)
+    width = bbox[2] - bbox[0]
+    if align == "right":
+        x -= width
+    elif align == "center":
+        x -= width / 2
+    draw.text((x - bbox[0], y - bbox[1]), text, font=text_font, fill=fill)
+
+
+def _fit_font(draw: ImageDraw.ImageDraw, text: str, max_width: int, preferred: int, minimum: int = 15) -> ImageFont.FreeTypeFont:
+    for size in range(preferred, minimum - 1, -1):
+        candidate = font(size, True)
+        bbox = draw.textbbox((0, 0), text, font=candidate)
+        if bbox[2] - bbox[0] <= max_width:
+            return candidate
+    return font(minimum, True)
 
 
 def _cut_points(box: tuple[int, int, int, int], cut: int = 18) -> list[tuple[int, int]]:
@@ -63,16 +99,15 @@ def _background(height: int) -> Image.Image:
 
     glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
     glow_draw = ImageDraw.Draw(glow)
-    glow_draw.ellipse((-260, -180, 590, 600), fill=(15, 174, 255, 110))
-    glow_draw.ellipse((720, -260, 1450, 540), fill=(126, 75, 255, 100))
-    glow_draw.ellipse((580, height - 480, 1320, height + 220), fill=(255, 126, 54, 55))
-    glow = glow.filter(ImageFilter.GaussianBlur(145))
-    image = Image.alpha_composite(image, glow)
+    glow_draw.ellipse((-260, -180, 590, 600), fill=(15, 174, 255, 105))
+    glow_draw.ellipse((720, -260, 1450, 540), fill=(126, 75, 255, 95))
+    glow_draw.ellipse((580, height - 480, 1320, height + 220), fill=(255, 126, 54, 50))
+    image = Image.alpha_composite(image, glow.filter(ImageFilter.GaussianBlur(145)))
 
     details = Image.new("RGBA", image.size, (0, 0, 0, 0))
     detail_draw = ImageDraw.Draw(details)
-    left_wall = [(0, 0), (238, 0), (188, 150), (229, 300), (154, 460), (206, 650), (125, 830), (170, 1040), (88, height), (0, height)]
-    right_wall = [(1200, 0), (1012, 0), (1062, 165), (1004, 328), (1068, 500), (1018, 710), (1080, 905), (1028, height), (1200, height)]
+    left_wall = [(0, 0), (238, 0), (188, 150), (229, 300), (154, 460), (206, 650), (125, 830), (88, height), (0, height)]
+    right_wall = [(1200, 0), (1012, 0), (1062, 165), (1004, 328), (1068, 500), (1018, 710), (1080, height), (1200, height)]
     detail_draw.polygon(left_wall, fill="#142532")
     detail_draw.polygon(right_wall, fill="#11222e")
     detail_draw.polygon([(0, 0), (128, 0), (92, 220), (166, 410), (76, 610), (0, 650)], fill="#1a2d3a")
@@ -80,7 +115,6 @@ def _background(height: int) -> Image.Image:
     detail_draw.polygon([(0, height - 128), (245, height - 176), (430, height - 108), (690, height - 155), (910, height - 90), (1200, height - 145), (1200, height), (0, height)], fill="#0b171f")
     detail_draw.line([(26, 260), (94, 314), (68, 367), (177, 426)], fill=(22, 140, 168, 155), width=4)
     detail_draw.line([(1175, 585), (1100, 644), (1132, 706), (1032, 778)], fill=(155, 123, 57, 150), width=4)
-    detail_draw.line([(128, height - 42), (225, height - 112), (332, height - 84), (402, height - 139)], fill=(22, 140, 168, 130), width=3)
 
     rng = random.Random(326)
     palette = [(72, 217, 255, 150), (150, 104, 255, 150), (255, 185, 72, 130)]
@@ -88,14 +122,13 @@ def _background(height: int) -> Image.Image:
         x = rng.randrange(20, WIDTH - 20)
         y = rng.randrange(20, height - 20)
         radius = rng.choice((1, 1, 2, 3))
-        color = rng.choice(palette)
-        detail_draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
+        detail_draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=rng.choice(palette))
 
     for anchor_x, anchor_y, scale, color in [
         (25, 90, 1.0, (36, 214, 255, 125)),
         (1170, 250, 0.8, (153, 91, 255, 135)),
-        (35, height - 145, 0.75, (255, 172, 58, 115)),
-        (1160, height - 115, 0.55, (45, 231, 190, 120)),
+        (35, height - 85, 0.65, (255, 172, 58, 115)),
+        (1160, height - 70, 0.55, (45, 231, 190, 120)),
     ]:
         for offset, size in [(-22, 62), (18, 86), (48, 48)]:
             x = anchor_x + int(offset * scale)
@@ -114,11 +147,10 @@ def _panel(image: Image.Image, box: tuple[int, int, int, int], radius: int = 30,
     draw = ImageDraw.Draw(layer)
     x1, y1, x2, y2 = box
     cut = min(22, radius)
-    shadow = [(px + 8, py + 12) for px, py in _cut_points(box, cut)]
-    draw.polygon(shadow, fill=(0, 0, 0, 105))
-    draw.polygon(_cut_points(box, cut), fill=(10, 20, 29, 232), outline=(45, 75, 93, 220), width=3)
-    draw.line((x1 + cut, y1 + 2, x2 - 92, y1 + 2), fill=accent, width=5)
-    draw.line((x1 + 2, y1 + cut, x1 + 2, y2 - 48), fill=accent, width=4)
+    draw.polygon([(px + 7, py + 9) for px, py in _cut_points(box, cut)], fill=(0, 0, 0, 105))
+    draw.polygon(_cut_points(box, cut), fill=(8, 18, 27, 238), outline=(45, 75, 93, 230), width=3)
+    draw.line((x1 + cut, y1 + 2, x2 - 90, y1 + 2), fill=accent, width=5)
+    draw.line((x1 + 2, y1 + cut, x1 + 2, y2 - 42), fill=accent, width=4)
     image.alpha_composite(layer)
 
 
@@ -127,84 +159,175 @@ def render_menu_card() -> bytes:
     _panel(image, (65, 62, 1135, 558), radius=38, accent="#42d9ff")
     draw = ImageDraw.Draw(image)
     _draw_pickaxe(draw, (100, 94))
-    draw.text((215, 105), "SKYBLOCK MONITOR", font=font(28, True), fill="#66e2ff")
-    draw.text((215, 155), "Mining Progress", font=font(60, True), fill="#f7f8ff")
-    draw.text((110, 255), "Живая статистика твоих шахтёров", font=font(30), fill="#b9bed4")
+    _text_top(draw, (215, 105), "SKYBLOCK MONITOR", text_font=font(28, True), fill="#66e2ff")
+    _text_top(draw, (215, 155), "Mining Progress", text_font=font(60, True), fill="#f7f8ff")
+    _text_top(draw, (110, 255), "Живая статистика твоих шахтёров", text_font=font(30), fill="#b9bed4")
     draw.rounded_rectangle((110, 350, 1090, 492), radius=26, fill=(13, 20, 39, 235), outline="#44547d", width=2)
-    draw.text((150, 382), "MINING  •  HOTM  •  POWDER  •  PURSE", font=font(29, True), fill="#80f2b8")
-    draw.text((150, 435), "Автоматическое обновление каждую минуту", font=font(25), fill="#a9aec4")
-    output = BytesIO()
-    image.convert("RGB").save(output, format="PNG", optimize=True)
-    return output.getvalue()
+    _text_top(draw, (150, 382), "MINING  •  HOTM  •  POWDER  •  PURSE", text_font=font(29, True), fill="#80f2b8")
+    _text_top(draw, (150, 435), "Автоматическое обновление каждую минуту", text_font=font(25), fill="#a9aec4")
+    return _png(image)
 
 
-def draw_metric(
+def _progress_line(
     draw: ImageDraw.ImageDraw,
     box: tuple[int, int, int, int],
     label: str,
-    value: str,
     delta: float,
+    progress: LevelProgress,
     accent: str,
 ) -> None:
-    draw.polygon(_cut_points(box, 13), fill=(20, 34, 48, 245), outline=(45, 75, 93, 230), width=2)
-    x1, y1, _, _ = box
-    draw.line((x1 + 17, y1 + 20, x1 + 17, y1 + 63), fill=accent, width=6)
-    draw.text((x1 + 34, y1 + 15), label, font=font(19), fill="#9ea7c4")
-    draw.text((x1 + 34, y1 + 47), value, font=font(29, True), fill=color_for(delta))
+    x1, y1, x2, y2 = box
+    draw.polygon(_cut_points(box, 10), fill=(18, 32, 46, 245), outline=(45, 75, 93, 230), width=2)
+    _text_top(draw, (x1 + 14, y1 + 8), f"{label} {progress.level}", text_font=font(16, True), fill="#dce5f5")
+    _text_top(draw, (x2 - 14, y1 + 8), f"{signed(delta)} XP", text_font=font(16, True), fill=color_for(delta), align="right")
+    if progress.next_level is None:
+        progress_text = "Максимальный уровень"
+    else:
+        progress_text = (
+            f"До {progress.next_level}: {format_number(progress.remaining)} XP"
+            f"  •  осталось {progress.remaining_percent:.1f}%"
+        )
+    _text_top(draw, (x1 + 14, y1 + 33), progress_text, text_font=font(13), fill="#aeb8d0")
+    bar = (x1 + 14, y2 - 12, x2 - 14, y2 - 6)
+    draw.rounded_rectangle(bar, radius=3, fill="#26364b")
+    fill_width = int((bar[2] - bar[0]) * min(100.0, max(0.0, progress.percent)) / 100)
+    if fill_width:
+        draw.rounded_rectangle((bar[0], bar[1], bar[0] + fill_width, bar[3]), radius=3, fill=accent)
 
 
-def render_progress_card(rows: list[tuple[Account, PeriodReport]], *, live: bool = False) -> bytes:
+def _metric(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], label: str, value: str, delta: float) -> None:
+    x1, y1, x2, _ = box
+    _text_top(draw, ((x1 + x2) / 2, y1 + 2), label.upper(), text_font=font(10, True), fill="#8996b4", align="center")
+    _text_top(draw, ((x1 + x2) / 2, y1 + 17), value, text_font=font(16, True), fill=color_for(delta), align="center")
+
+
+def _rate(report: PeriodReport) -> float:
+    seconds = max(1.0, (report.end.observed_at - report.start.observed_at).total_seconds())
+    return report.mining_xp * 3600 / seconds
+
+
+def _draw_account_panel(
+    image: Image.Image,
+    box: tuple[int, int, int, int],
+    account: Account,
+    report: PeriodReport,
+    accent: str,
+) -> None:
+    _panel(image, box, radius=24, accent=accent)
+    draw = ImageDraw.Draw(image)
+    x1, y1, x2, _ = box
+    draw.ellipse((x1 + 22, y1 + 17, x1 + 64, y1 + 59), fill=accent, outline="#dffaff", width=2)
+    initial_font = font(20, True)
+    _text_top(draw, (x1 + 43, y1 + 27), account.username[:1].upper(), text_font=initial_font, fill="#07101e", align="center")
+    name_font = _fit_font(draw, account.username, x2 - x1 - 104, 23)
+    _text_top(draw, (x1 + 78, y1 + 15), account.username, text_font=name_font, fill="#f7f8ff")
+    elapsed = report.end.observed_at - report.start.observed_at
+    minutes = max(0, int(elapsed.total_seconds() // 60))
+    meta = f"{account.profile_name.upper()}  •  {minutes // 60}ч {minutes % 60:02d}м  •  {format_number(_rate(report))} XP/ч"
+    _text_top(draw, (x1 + 78, y1 + 44), meta, text_font=font(11, True), fill=accent)
+
+    mining = level_progress(report.end.mining_xp, MINING_XP_COSTS)
+    hotm = level_progress(report.end.hotm_xp, HOTM_XP_COSTS)
+    _progress_line(draw, (x1 + 22, y1 + 72, x2 - 22, y1 + 134), "MINING", report.mining_xp, mining, accent)
+    _progress_line(draw, (x1 + 22, y1 + 142, x2 - 22, y1 + 204), "HOTM", report.end.hotm_xp - report.start.hotm_xp, hotm, accent)
+
+    metrics = [
+        ("Комиссии", signed(report.commissions), report.commissions),
+        ("Mithril", signed(report.mithril_powder), report.mithril_powder),
+        ("Gemstone", signed(report.gemstone_powder), report.gemstone_powder),
+        ("Glacite", signed(report.glacite_powder), report.glacite_powder),
+        ("Purse", signed(report.purse), report.purse),
+        ("SB Level", str(report.end.skyblock_level), report.end.skyblock_level - report.start.skyblock_level),
+    ]
+    content_width = x2 - x1 - 44
+    column_width = content_width // 3
+    for index, (label, value, delta) in enumerate(metrics):
+        col, row = index % 3, index // 3
+        mx1 = x1 + 22 + col * column_width
+        my1 = y1 + 216 + row * 39
+        if col:
+            draw.line((mx1, my1 + 2, mx1, my1 + 31), fill="#263d50", width=1)
+        _metric(draw, (mx1, my1, mx1 + column_width, my1 + 36), label, value, delta)
+
+
+def _panel_boxes(count: int) -> list[tuple[int, int, int, int]]:
+    half_left = (55, 0, 585, 0)
+    half_right = (615, 0, 1145, 0)
+    if count == 1:
+        return [(220, 300, 980, 610)]
+    if count == 2:
+        return [(half_left[0], 300, half_left[2], 610), (half_right[0], 300, half_right[2], 610)]
+    if count == 3:
+        return [
+            (half_left[0], 205, half_left[2], 515),
+            (half_right[0], 205, half_right[2], 515),
+            (335, 535, 865, 845),
+        ]
+    return [
+        (half_left[0], 205, half_left[2], 515),
+        (half_right[0], 205, half_right[2], 515),
+        (half_left[0], 535, half_left[2], 845),
+        (half_right[0], 535, half_right[2], 845),
+    ]
+
+
+def render_progress_card(
+    rows: list[tuple[Account, PeriodReport]],
+    *,
+    live: bool = False,
+    page: int = 1,
+    page_count: int = 1,
+) -> bytes:
     if not rows:
         raise ValueError("At least one report is required")
-    height = 320 + len(rows) * 500
-    image = _background(height)
-    _panel(image, (58, 46, 1142, 222), radius=32, accent="#a06bff")
+    if len(rows) > MAX_ACCOUNTS_PER_CARD:
+        raise ValueError("A progress card supports at most four accounts")
+
+    image = _background(CARD_HEIGHT)
+    _panel(image, (55, 34, 1145, 180), radius=30, accent="#a06bff")
     draw = ImageDraw.Draw(image)
-    _draw_pickaxe(draw, (82, 74))
-    draw.text((194, 76), "CRYSTAL HOLLOWS  /  MINING LOG", font=font(23, True), fill="#66e2ff")
-    draw.text((194, 112), "Отчёт по майнингу", font=font(45, True), fill="#f7f8ff")
+    _draw_pickaxe(draw, (76, 62))
+    _text_top(draw, (183, 59), "CRYSTAL HOLLOWS  /  MINING LOG", text_font=font(19, True), fill="#66e2ff")
+    _text_top(draw, (183, 87), "Отчёт по майнингу", text_font=font(38, True), fill="#f7f8ff")
     if live:
-        draw.ellipse((884, 79, 908, 103), fill="#ff4d68")
-        draw.polygon(_cut_points((922, 72, 1098, 112), 10), fill="#5a1725", outline="#ff4d68", width=2)
-        draw.text((948, 79), "LIVE", font=font(22, True), fill="#ff8294")
+        draw.ellipse((882, 61, 904, 83), fill="#ff4d68")
+        draw.polygon(_cut_points((918, 55, 1097, 91), 9), fill="#5a1725", outline="#ff4d68", width=2)
+        _text_top(draw, (1008, 63), "LIVE", text_font=font(18, True), fill="#ff8294", align="center")
+
     period_start = min(report.start.observed_at for _, report in rows).astimezone(MOSCOW)
     period_end = max(report.end.observed_at for _, report in rows).astimezone(MOSCOW)
-    period = f"{period_start:%d.%m.%Y %H:%M} — {period_end:%d.%m.%Y %H:%M} МСК"
-    draw.polygon(_cut_points((194, 174, 711, 207), 9), fill=(27, 37, 65, 230))
-    draw.text((211, 179), period, font=font(19), fill="#c2c8dc")
+    period = f"{period_start:%d.%m %H:%M} — {period_end:%d.%m %H:%M} МСК"
+    draw.polygon(_cut_points((183, 139, 620, 168), 8), fill=(27, 37, 65, 230))
+    _text_top(draw, (198, 145), period, text_font=font(15), fill="#c2c8dc")
+    if page_count > 1:
+        _text_top(draw, (1095, 145), f"КАРТОЧКА {page}/{page_count}", text_font=font(14, True), fill="#aeb8d0", align="right")
 
     accents = ["#42d9ff", "#a06bff", "#ffb84a", "#45e7b0"]
-    for index, (account, report) in enumerate(rows):
-        top = 258 + index * 500
-        accent = accents[index % len(accents)]
-        _panel(image, (58, top, 1142, top + 456), radius=30, accent=accent)
-        draw = ImageDraw.Draw(image)
-        draw.ellipse((91, top + 28, 145, top + 82), fill=accent, outline="#dffaff", width=2)
-        initial = account.username[:1].upper()
-        bbox = draw.textbbox((0, 0), initial, font=font(25, True))
-        draw.text((118 - (bbox[2] - bbox[0]) / 2, top + 38), initial, font=font(25, True), fill="#07101e")
-        draw.text((163, top + 24), account.username, font=font(33, True), fill="#f7f8ff")
-        draw.text((164, top + 66), f"PROFILE  {account.profile_name.upper()}", font=font(18, True), fill=accent)
-        metrics = [
-            ("Mining XP", signed(report.mining_xp), report.mining_xp),
-            ("Mining Level", f"{report.start.mining_level} → {report.end.mining_level}", report.end.mining_level - report.start.mining_level),
-            ("Commissions", signed(report.commissions), report.commissions),
-            ("HOTM XP", signed(report.end.hotm_xp - report.start.hotm_xp), report.end.hotm_xp - report.start.hotm_xp),
-            ("HOTM Level", f"{report.start.hotm_level} → {report.end.hotm_level}", report.end.hotm_level - report.start.hotm_level),
-            ("Mithril Powder", signed(report.mithril_powder), report.mithril_powder),
-            ("Gemstone Powder", signed(report.gemstone_powder), report.gemstone_powder),
-            ("Glacite Powder", signed(report.glacite_powder), report.glacite_powder),
-            ("Purse", signed(report.purse), report.purse),
-        ]
-        for metric_index, (label, value, delta) in enumerate(metrics):
-            col, row = metric_index % 3, metric_index // 3
-            x = 91 + col * 340
-            y = top + 112 + row * 98
-            draw_metric(draw, (x, y, x + 315, y + 82), label, value, delta, accent)
-        if report.mining_xp >= 10_000 and report.commissions == 0:
-            draw.rounded_rectangle((91, top + 418, 1109, top + 445), radius=12, fill=(82, 49, 22, 235))
-            draw.text((111, top + 419), "⚠ Mining XP растёт, но commissions не изменились", font=font(17, True), fill="#ffd08a")
+    for box, (account, report), accent in zip(_panel_boxes(len(rows)), rows, accents[:len(rows)], strict=True):
+        _draw_account_panel(image, box, account, report, accent)
 
+    _text_top(
+        draw,
+        (600, 872),
+        "ДОПОЛНИТЕЛЬНО: SKYBLOCK LEVEL  •  СКОРОСТЬ MINING XP/ЧАС",
+        text_font=font(12, True),
+        fill="#72809e",
+        align="center",
+    )
+    return _png(image)
+
+
+def render_progress_cards(rows: list[tuple[Account, PeriodReport]], *, live: bool = False) -> list[bytes]:
+    if not rows:
+        raise ValueError("At least one report is required")
+    chunks = [rows[index:index + MAX_ACCOUNTS_PER_CARD] for index in range(0, len(rows), MAX_ACCOUNTS_PER_CARD)]
+    return [
+        render_progress_card(chunk, live=live, page=index + 1, page_count=len(chunks))
+        for index, chunk in enumerate(chunks)
+    ]
+
+
+def _png(image: Image.Image) -> bytes:
     output = BytesIO()
     image.convert("RGB").save(output, format="PNG", optimize=True)
     return output.getvalue()

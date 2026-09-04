@@ -24,10 +24,10 @@ from aiogram.types import (
     Message,
 )
 
-from .cards import render_menu_card, render_progress_card
+from .cards import render_menu_card, render_progress_card, render_progress_cards
 from .hypixel import HypixelClient, is_skyblock_online
 from .models import LiveView
-from .presentation import MOSCOW, format_report, parse_custom_period
+from .presentation import MOSCOW, parse_custom_period
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -88,11 +88,38 @@ def all_accounts_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def live_keyboard(view_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def _pager_row(prefix: str, page: int, page_count: int) -> list[InlineKeyboardButton]:
+    row = []
+    if page > 0:
+        row.append(InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:{page - 1}"))
+    row.append(InlineKeyboardButton(text=f"{page + 1}/{page_count}", callback_data="page-noop"))
+    if page + 1 < page_count:
+        row.append(InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:{page + 1}"))
+    return row
+
+
+def report_keyboard(
+    base: InlineKeyboardMarkup,
+    prefix: str,
+    *,
+    page: int,
+    page_count: int,
+) -> InlineKeyboardMarkup:
+    rows = [list(row) for row in base.inline_keyboard]
+    if page_count > 1:
+        rows.insert(0, _pager_row(prefix, page, page_count))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def live_keyboard(view_id: int, *, page: int = 0, page_count: int = 1) -> InlineKeyboardMarkup:
+    rows = []
+    if page_count > 1:
+        rows.append(_pager_row(f"live-page:{view_id}", page, page_count))
+    rows.extend([
         [InlineKeyboardButton(text="⏹ Остановить эфир", callback_data=f"live-stop:{view_id}")],
         [InlineKeyboardButton(text="🗂 Сессии", callback_data=f"live-sessions:{view_id}")],
     ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def session_keyboard() -> InlineKeyboardMarkup:
@@ -256,11 +283,13 @@ async def update_live_message(bot: Bot, view: LiveView, *, live: bool = True) ->
     if not rows:
         return False
     caption = live_caption(view, now, live=live)
+    cards = render_progress_cards(rows, live=live)
+    page = min(view.current_page, len(cards) - 1)
     media = InputMediaPhoto(
-        media=BufferedInputFile(render_progress_card(rows, live=live), filename="skyblock-live.png"),
+        media=BufferedInputFile(cards[page], filename=f"skyblock-live-{page + 1}.png"),
         caption=caption,
     )
-    keyboard = live_keyboard(view.id) if live else main_keyboard()
+    keyboard = live_keyboard(view.id, page=page, page_count=len(cards)) if live else main_keyboard()
     await bot.edit_message_media(chat_id=view.chat_id, message_id=view.message_id, media=media, reply_markup=keyboard)
     return True
 
@@ -301,6 +330,24 @@ async def start_live(query: CallbackQuery, bot: Bot) -> None:
         started_at,
     )
     await update_live_message(bot, view)
+
+
+@router.callback_query(F.data.startswith("live-page:"))
+async def show_live_page(query: CallbackQuery, bot: Bot) -> None:
+    _, view_id, page = query.data.split(":")
+    view = store.get_live_view(int(view_id), query.from_user.id)
+    if view is None:
+        await query.answer("Эфир не найден", show_alert=True)
+        return
+    store.set_live_page(view.id, int(page), query.from_user.id)
+    updated = store.get_live_view(view.id, query.from_user.id)
+    await update_live_message(bot, updated)
+    await query.answer()
+
+
+@router.callback_query(F.data == "page-noop")
+async def page_noop(query: CallbackQuery) -> None:
+    await query.answer()
 
 
 @router.callback_query(F.data.startswith("live-stop:"))
@@ -381,7 +428,16 @@ async def show_session(query: CallbackQuery) -> None:
     await query.answer()
 
 
-async def send_report(message: Message, user_id: int, account_id: int, start_at: datetime, end_at: datetime) -> None:
+async def send_report(
+    message: Message,
+    user_id: int,
+    account_id: int,
+    start_at: datetime,
+    end_at: datetime,
+    *,
+    page: int = 0,
+    navigation: str | None = None,
+) -> None:
     accounts_list = store.list_accounts(user_id) if account_id == 0 else []
     if account_id != 0:
         account = store.get_account(account_id, user_id)
@@ -395,20 +451,46 @@ async def send_report(message: Message, user_id: int, account_id: int, start_at:
     if not reports:
         await edit_screen(message, "Для этого периода пока недостаточно снимков. Нужно минимум две точки.")
         return
-    keyboard = all_accounts_keyboard() if account_id == 0 else account_keyboard(account_id)
+    base_keyboard = all_accounts_keyboard() if account_id == 0 else account_keyboard(account_id)
+    cards = render_progress_cards(reports)
+    page = min(max(0, page), len(cards) - 1)
+    prefix = navigation or f"report-page:{account_id}:1h"
+    keyboard = report_keyboard(base_keyboard, prefix, page=page, page_count=len(cards))
+    image = BufferedInputFile(cards[page], filename=f"skyblock-progress-{page + 1}.png")
     if message.photo:
-        image = BufferedInputFile(render_progress_card(reports), filename="skyblock-progress.png")
         await message.edit_media(InputMediaPhoto(media=image), reply_markup=keyboard)
     else:
-        text = "\n\n".join(format_report(account.username, account.profile_name, report) for account, report in reports)
-        await edit_screen(message, text, keyboard)
+        await message.answer_photo(image, caption="Отчёт по выбранному периоду", reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("period:"))
 async def preset_period(query: CallbackQuery) -> None:
     _, account_id, code = query.data.split(":")
     end_at = datetime.now(UTC)
-    await send_report(query.message, query.from_user.id, int(account_id), end_at - duration(code), end_at)
+    await send_report(
+        query.message,
+        query.from_user.id,
+        int(account_id),
+        end_at - duration(code),
+        end_at,
+        navigation=f"report-page:{account_id}:{code}",
+    )
+    await query.answer()
+
+
+@router.callback_query(F.data.startswith("report-page:"))
+async def preset_report_page(query: CallbackQuery) -> None:
+    _, account_id, code, page = query.data.split(":")
+    end_at = datetime.now(UTC)
+    await send_report(
+        query.message,
+        query.from_user.id,
+        int(account_id),
+        end_at - duration(code),
+        end_at,
+        page=int(page),
+        navigation=f"report-page:{account_id}:{code}",
+    )
     await query.answer()
 
 
@@ -433,7 +515,33 @@ async def custom_value(message: Message, state: FSMContext) -> None:
         return
     account_id = int((await state.get_data())["account_id"])
     await state.clear()
-    await send_report(message, message.from_user.id, account_id, start_at, end_at)
+    navigation = f"custom-page:{account_id}:{int(start_at.timestamp())}:{int(end_at.timestamp())}"
+    await send_report(
+        message,
+        message.from_user.id,
+        account_id,
+        start_at,
+        end_at,
+        navigation=navigation,
+    )
+
+
+@router.callback_query(F.data.startswith("custom-page:"))
+async def custom_report_page(query: CallbackQuery) -> None:
+    _, account_id, start_timestamp, end_timestamp, page = query.data.split(":")
+    start_at = datetime.fromtimestamp(int(start_timestamp), UTC)
+    end_at = datetime.fromtimestamp(int(end_timestamp), UTC)
+    navigation = f"custom-page:{account_id}:{start_timestamp}:{end_timestamp}"
+    await send_report(
+        query.message,
+        query.from_user.id,
+        int(account_id),
+        start_at,
+        end_at,
+        page=int(page),
+        navigation=navigation,
+    )
+    await query.answer()
 
 
 @router.callback_query(F.data.startswith("refresh:"))

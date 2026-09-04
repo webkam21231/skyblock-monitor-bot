@@ -64,12 +64,16 @@ class Store:
                     message_id INTEGER NOT NULL,
                     account_id INTEGER NOT NULL DEFAULT 0,
                     started_at TEXT NOT NULL,
-                    active INTEGER NOT NULL DEFAULT 1
+                    active INTEGER NOT NULL DEFAULT 1,
+                    current_page INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS active_live_views
                     ON live_views(active, telegram_user_id);
                 """
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(live_views)")}
+            if "current_page" not in columns:
+                db.execute("ALTER TABLE live_views ADD COLUMN current_page INTEGER NOT NULL DEFAULT 0")
 
     def add_account(self, telegram_user_id: int, username: str, uuid: str, profile_name: str) -> Account:
         with self._connect() as db:
@@ -275,6 +279,13 @@ class Store:
             ).fetchone()
         return self._live_view(row) if row else None
 
+    def set_live_page(self, view_id: int, page: int, telegram_user_id: int) -> None:
+        with self._connect() as db:
+            db.execute(
+                "UPDATE live_views SET current_page=? WHERE id=? AND telegram_user_id=?",
+                (max(0, page), view_id, telegram_user_id),
+            )
+
     def list_active_live_views(self) -> list[LiveView]:
         with self._connect() as db:
             rows = db.execute("SELECT * FROM live_views WHERE active=1 ORDER BY id").fetchall()
@@ -337,4 +348,5 @@ class Store:
             message_id=row["message_id"],
             account_id=row["account_id"],
             started_at=datetime.fromisoformat(row["started_at"]),
+            current_page=row["current_page"],
         )

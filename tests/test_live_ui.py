@@ -1,6 +1,14 @@
 from datetime import UTC, datetime
 
-from skyblock_monitor.bot import account_keyboard, is_message_not_modified, live_caption, live_keyboard, main_keyboard
+from skyblock_monitor.bot import (
+    account_keyboard,
+    all_accounts_keyboard,
+    is_message_not_modified,
+    live_caption,
+    live_keyboard,
+    main_keyboard,
+    report_keyboard,
+)
 from skyblock_monitor.models import LiveView
 
 
@@ -21,6 +29,21 @@ def test_account_menu_can_start_account_only_live_view():
 def test_live_screen_can_be_stopped_without_new_message():
     keyboard = live_keyboard(9)
     assert "live-stop:9" in callback_values(keyboard)
+
+
+def test_live_screen_has_page_buttons_for_more_than_four_accounts():
+    keyboard = live_keyboard(9, page=0, page_count=2)
+
+    assert "live-page:9:1" in callback_values(keyboard)
+    assert "live-page:9:0" not in callback_values(keyboard)
+
+
+def test_period_report_has_in_place_card_pagination():
+    keyboard = report_keyboard(all_accounts_keyboard(), "report-page:0:1h", page=0, page_count=2)
+
+    assert "report-page:0:1h:1" in callback_values(keyboard)
+    assert "report-page:0:1h:0" not in callback_values(keyboard)
+    assert "period:0:1h" in callback_values(keyboard)
 
 
 def test_live_caption_shows_refresh_time():

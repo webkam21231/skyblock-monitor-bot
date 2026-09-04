@@ -3,7 +3,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from skyblock_monitor.cards import render_progress_card
+from skyblock_monitor.cards import render_progress_card, render_progress_cards
 from skyblock_monitor.models import Account, PeriodReport, Snapshot
 
 
@@ -20,8 +20,29 @@ def test_renders_one_account_as_shareable_png():
     image = Image.open(BytesIO(result))
 
     assert image.format == "PNG"
-    assert image.width == 1200
-    assert image.height >= 700
+    assert image.size == (1200, 900)
+
+
+def test_one_card_accepts_up_to_four_accounts():
+    for count in range(1, 5):
+        rows = [
+            (Account(index, 7, f"Miner{index}", str(index), "Papaya"), report(index, mining=25_000, commissions=1, powder=500))
+            for index in range(1, count + 1)
+        ]
+        image = Image.open(BytesIO(render_progress_card(rows)))
+        assert image.size == (1200, 900)
+
+
+def test_five_accounts_split_into_two_four_by_three_cards():
+    rows = [
+        (Account(index, 7, f"Miner{index}", str(index), "Papaya"), report(index, mining=25_000, commissions=1, powder=500))
+        for index in range(1, 6)
+    ]
+
+    cards = render_progress_cards(rows)
+
+    assert len(cards) == 2
+    assert [Image.open(BytesIO(card)).size for card in cards] == [(1200, 900), (1200, 900)]
 
 
 def test_renders_all_accounts_on_one_image():
@@ -32,8 +53,7 @@ def test_renders_all_accounts_on_one_image():
 
     image = Image.open(BytesIO(render_progress_card(accounts)))
 
-    assert image.width == 1200
-    assert image.height >= 1_100
+    assert image.size == (1200, 900)
 
 
 def test_background_has_visible_skyblock_cavern_color():

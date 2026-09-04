@@ -56,3 +56,4 @@ class LiveView:
     message_id: int
     account_id: int
     started_at: datetime
+    current_page: int = 0

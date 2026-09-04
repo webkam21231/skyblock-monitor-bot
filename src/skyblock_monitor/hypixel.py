@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
@@ -18,6 +19,30 @@ MINING_XP_COSTS = [
     5_800_000, 6_100_000, 6_400_000, 6_700_000, 7_000_000,
 ]
 HOTM_XP_COSTS = [0, 3_000, 9_000, 25_000, 60_000, 100_000, 150_000, 210_000, 290_000, 400_000]
+
+
+@dataclass(frozen=True)
+class LevelProgress:
+    level: int
+    next_level: int | None
+    remaining: int
+    percent: float
+
+    @property
+    def remaining_percent(self) -> float:
+        return round(100.0 - self.percent, 1) if self.next_level is not None else 0.0
+
+
+def level_progress(total_xp: float, costs: list[int]) -> LevelProgress:
+    remaining_xp = max(0.0, total_xp)
+    level = 0
+    for cost in costs:
+        if remaining_xp < cost:
+            percent = 100.0 if cost == 0 else round(remaining_xp / cost * 100, 1)
+            return LevelProgress(level, level + 1, round(cost - remaining_xp), percent)
+        remaining_xp -= cost
+        level += 1
+    return LevelProgress(level, None, 0, 100.0)
 
 
 def level_from_xp(total_xp: float, costs: list[int]) -> int:
