@@ -25,6 +25,21 @@ def color_for(value: float) -> str:
     return "#9296a3"
 
 
+def render_menu_card() -> bytes:
+    image = Image.new("RGB", (WIDTH, 620), "#090a0d")
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((55, 55, 1145, 565), radius=38, fill="#111218", outline="#303348", width=3)
+    draw.text((95, 100), "SKYBLOCK MONITOR", font=font(28, True), fill="#7f8cff")
+    draw.text((95, 165), "Mining Progress", font=font(64, True), fill="#f4f5f8")
+    draw.text((95, 260), "Все аккаунты и периоды — в одном сообщении", font=font(30), fill="#a4a7b2")
+    draw.rounded_rectangle((95, 350, 1105, 490), radius=28, fill="#17181d", outline="#282a33", width=2)
+    draw.text((135, 382), "MINING  •  HOTM  •  POWDER  •  PURSE", font=font(29, True), fill="#70e1a1")
+    draw.text((135, 435), "Автоматическое обновление каждую минуту", font=font(25), fill="#9296a3")
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
 def draw_metric(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], label: str, value: str, delta: float) -> None:
     draw.rounded_rectangle(box, radius=20, fill="#17181d", outline="#282a33", width=2)
     x1, y1, _, _ = box

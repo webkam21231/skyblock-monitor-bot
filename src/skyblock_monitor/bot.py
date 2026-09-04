@@ -10,15 +10,23 @@ import httpx
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Message,
+)
 
-from .cards import render_progress_card
+from .cards import render_menu_card, render_progress_card
 from .hypixel import HypixelClient
-from .presentation import MOSCOW, parse_custom_period
+from .presentation import MOSCOW, format_report, parse_custom_period
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -98,32 +106,47 @@ def duration(code: str) -> timedelta:
     return timedelta(minutes=amount) if unit == "m" else timedelta(hours=amount) if unit == "h" else timedelta(days=amount)
 
 
+async def edit_screen(message: Message, text: str, keyboard: InlineKeyboardMarkup | None = None) -> None:
+    try:
+        if message.photo:
+            await message.edit_caption(caption=text, reply_markup=keyboard)
+        else:
+            await message.edit_text(text, reply_markup=keyboard)
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc):
+            raise
+
+
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("Мониторинг прогресса Hypixel SkyBlock", reply_markup=main_keyboard())
+    await message.answer_photo(
+        BufferedInputFile(render_menu_card(), filename="skyblock-monitor.png"),
+        caption="Мониторинг прогресса Hypixel SkyBlock",
+        reply_markup=main_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "home")
 async def home(query: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await query.message.answer("Главное меню", reply_markup=main_keyboard())
+    await edit_screen(query.message, "Главное меню", main_keyboard())
     await query.answer()
 
 
 @router.callback_query(F.data == "all")
 async def all_accounts(query: CallbackQuery) -> None:
     if not store.list_accounts(query.from_user.id):
-        await query.message.answer("Пока нет добавленных аккаунтов.", reply_markup=main_keyboard())
+        await edit_screen(query.message, "Пока нет добавленных аккаунтов.", main_keyboard())
     else:
-        await query.message.answer("Выбери период для всех аккаунтов:", reply_markup=all_accounts_keyboard())
+        await edit_screen(query.message, "Выбери период для всех аккаунтов:", all_accounts_keyboard())
     await query.answer()
 
 
 @router.callback_query(F.data == "add")
 async def add_begin(query: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AddAccount.username)
-    await query.message.answer("Напиши Minecraft-ник:")
+    await edit_screen(query.message, "Напиши Minecraft-ник:")
     await query.answer()
 
 
@@ -160,12 +183,12 @@ async def add_profile(message: Message, state: FSMContext) -> None:
 async def accounts(query: CallbackQuery) -> None:
     accounts_list = store.list_accounts(query.from_user.id)
     if not accounts_list:
-        await query.message.answer("Пока нет добавленных аккаунтов.", reply_markup=main_keyboard())
+        await edit_screen(query.message, "Пока нет добавленных аккаунтов.", main_keyboard())
     else:
         keyboard = [[InlineKeyboardButton(text=f"{a.username} / {a.profile_name}", callback_data=f"account:{a.id}")]
                     for a in accounts_list]
         keyboard.append([InlineKeyboardButton(text="➕ Добавить аккаунт", callback_data="add")])
-        await query.message.answer("Выбери аккаунт:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+        await edit_screen(query.message, "Выбери аккаунт:", InlineKeyboardMarkup(inline_keyboard=keyboard))
     await query.answer()
 
 
@@ -174,7 +197,7 @@ async def show_account(query: CallbackQuery) -> None:
     account_id = int(query.data.split(":")[1])
     account = store.get_account(account_id, query.from_user.id)
     if account:
-        await query.message.answer(current_text(account, store.latest_snapshot(account.id)), reply_markup=account_keyboard(account.id))
+        await edit_screen(query.message, current_text(account, store.latest_snapshot(account.id)), account_keyboard(account.id))
     await query.answer()
 
 
@@ -190,11 +213,15 @@ async def send_report(message: Message, user_id: int, account_id: int, start_at:
         if report:
             reports.append((account, report))
     if not reports:
-        await message.answer("Для этого периода пока недостаточно снимков. Нужно минимум две точки.")
+        await edit_screen(message, "Для этого периода пока недостаточно снимков. Нужно минимум две точки.")
         return
-    image = render_progress_card(reports)
     keyboard = all_accounts_keyboard() if account_id == 0 else account_keyboard(account_id)
-    await message.answer_photo(BufferedInputFile(image, filename="skyblock-progress.png"), reply_markup=keyboard)
+    if message.photo:
+        image = BufferedInputFile(render_progress_card(reports), filename="skyblock-progress.png")
+        await message.edit_media(InputMediaPhoto(media=image), reply_markup=keyboard)
+    else:
+        text = "\n\n".join(format_report(account.username, account.profile_name, report) for account, report in reports)
+        await edit_screen(message, text, keyboard)
 
 
 @router.callback_query(F.data.startswith("period:"))
@@ -213,7 +240,7 @@ async def custom_begin(query: CallbackQuery, state: FSMContext) -> None:
         return
     await state.set_state(CustomPeriod.value)
     await state.update_data(account_id=account_id)
-    await query.message.answer("Введи период по МСК:\n<code>04.09.2026 18:30 - 04.09.2026 21:45</code>")
+    await edit_screen(query.message, "Введи период по МСК:\n<code>04.09.2026 18:30 - 04.09.2026 21:45</code>")
     await query.answer()
 
 
@@ -237,9 +264,9 @@ async def refresh(query: CallbackQuery) -> None:
         try:
             snapshot = await hypixel.fetch(account.id, account.uuid, account.profile_name)
             store.save_snapshot(snapshot)
-            await query.message.answer(current_text(account, snapshot), reply_markup=account_keyboard(account.id))
+            await edit_screen(query.message, current_text(account, snapshot), account_keyboard(account.id))
         except (httpx.HTTPError, ValueError, KeyError) as exc:
-            await query.message.answer(f"Ошибка обновления: {exc}")
+            await edit_screen(query.message, f"Ошибка обновления: {exc}", account_keyboard(account.id))
     await query.answer()
 
 
@@ -247,7 +274,7 @@ async def refresh(query: CallbackQuery) -> None:
 async def delete(query: CallbackQuery) -> None:
     account_id = int(query.data.split(":")[1])
     store.delete_account(account_id, query.from_user.id)
-    await query.message.answer("Аккаунт удалён из мониторинга.", reply_markup=main_keyboard())
+    await edit_screen(query.message, "Аккаунт удалён из мониторинга.", main_keyboard())
     await query.answer()
 
 
