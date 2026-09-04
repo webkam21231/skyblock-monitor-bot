@@ -3,7 +3,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from skyblock_monitor.cards import render_progress_card, render_progress_cards
+from skyblock_monitor.cards import eta_text, render_progress_card, render_progress_cards, xp_rates
 from skyblock_monitor.models import Account, PeriodReport, Snapshot
 
 
@@ -21,6 +21,19 @@ def test_renders_one_account_as_shareable_png():
 
     assert image.format == "PNG"
     assert image.size == (1200, 900)
+
+
+def test_calculates_mining_and_hotm_xp_per_hour():
+    mining_per_hour, hotm_per_hour = xp_rates(report(1, mining=25_000, commissions=1, powder=500))
+
+    assert mining_per_hour == 25_000
+    assert hotm_per_hour == 1_000
+
+
+def test_eta_shows_hours_and_minutes_for_current_rate():
+    assert eta_text(834_771, 25_000) == "33ч 23м"
+    assert eta_text(38_235, 1_000) == "38ч 14м"
+    assert eta_text(38_235, 0) == "—"
 
 
 def test_one_card_accepts_up_to_four_accounts():

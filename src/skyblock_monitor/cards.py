@@ -174,6 +174,7 @@ def _progress_line(
     label: str,
     delta: float,
     progress: LevelProgress,
+    xp_per_hour: float,
     accent: str,
 ) -> None:
     x1, y1, x2, y2 = box
@@ -185,7 +186,7 @@ def _progress_line(
     else:
         progress_text = (
             f"До {progress.next_level}: {format_number(progress.remaining)} XP"
-            f"  •  осталось {progress.remaining_percent:.1f}%"
+            f"  •  {progress.remaining_percent:.1f}%  •  ≈ {eta_text(progress.remaining, xp_per_hour)}"
         )
     _text_top(draw, (x1 + 14, y1 + 33), progress_text, text_font=font(13), fill="#aeb8d0")
     bar = (x1 + 14, y2 - 12, x2 - 14, y2 - 6)
@@ -201,9 +202,29 @@ def _metric(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], label: st
     _text_top(draw, ((x1 + x2) / 2, y1 + 17), value, text_font=font(16, True), fill=color_for(delta), align="center")
 
 
-def _rate(report: PeriodReport) -> float:
+def xp_rates(report: PeriodReport) -> tuple[float, float]:
     seconds = max(1.0, (report.end.observed_at - report.start.observed_at).total_seconds())
-    return report.mining_xp * 3600 / seconds
+    factor = 3600 / seconds
+    return report.mining_xp * factor, (report.end.hotm_xp - report.start.hotm_xp) * factor
+
+
+def eta_text(remaining_xp: int, xp_per_hour: float) -> str:
+    if xp_per_hour <= 0:
+        return "—"
+    total_minutes = round(remaining_xp / xp_per_hour * 60)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{hours}ч {minutes:02d}м"
+
+
+def _compact_number(value: float) -> str:
+    absolute = abs(value)
+    if absolute >= 1_000_000:
+        rendered = f"{absolute / 1_000_000:.1f}m"
+    elif absolute >= 1_000:
+        rendered = f"{absolute / 1_000:.1f}k"
+    else:
+        rendered = f"{absolute:.0f}"
+    return ("+" if value >= 0 else "−") + rendered
 
 
 def _draw_account_panel(
@@ -223,13 +244,30 @@ def _draw_account_panel(
     _text_top(draw, (x1 + 78, y1 + 15), account.username, text_font=name_font, fill="#f7f8ff")
     elapsed = report.end.observed_at - report.start.observed_at
     minutes = max(0, int(elapsed.total_seconds() // 60))
-    meta = f"{account.profile_name.upper()}  •  {minutes // 60}ч {minutes % 60:02d}м  •  {format_number(_rate(report))} XP/ч"
+    meta = f"{account.profile_name.upper()}  •  {minutes // 60}ч {minutes % 60:02d}м"
     _text_top(draw, (x1 + 78, y1 + 44), meta, text_font=font(11, True), fill=accent)
 
     mining = level_progress(report.end.mining_xp, MINING_XP_COSTS)
     hotm = level_progress(report.end.hotm_xp, HOTM_XP_COSTS)
-    _progress_line(draw, (x1 + 22, y1 + 72, x2 - 22, y1 + 134), "MINING", report.mining_xp, mining, accent)
-    _progress_line(draw, (x1 + 22, y1 + 142, x2 - 22, y1 + 204), "HOTM", report.end.hotm_xp - report.start.hotm_xp, hotm, accent)
+    mining_rate, hotm_rate = xp_rates(report)
+    _progress_line(
+        draw,
+        (x1 + 22, y1 + 72, x2 - 22, y1 + 134),
+        "MINING",
+        report.mining_xp,
+        mining,
+        mining_rate,
+        accent,
+    )
+    _progress_line(
+        draw,
+        (x1 + 22, y1 + 142, x2 - 22, y1 + 204),
+        "HOTM",
+        report.end.hotm_xp - report.start.hotm_xp,
+        hotm,
+        hotm_rate,
+        accent,
+    )
 
     metrics = [
         ("Комиссии", signed(report.commissions), report.commissions),
@@ -238,11 +276,13 @@ def _draw_account_panel(
         ("Glacite", signed(report.glacite_powder), report.glacite_powder),
         ("Purse", signed(report.purse), report.purse),
         ("SB Level", str(report.end.skyblock_level), report.end.skyblock_level - report.start.skyblock_level),
+        ("Mining XP/ч", _compact_number(mining_rate), mining_rate),
+        ("HOTM XP/ч", _compact_number(hotm_rate), hotm_rate),
     ]
     content_width = x2 - x1 - 44
-    column_width = content_width // 3
+    column_width = content_width // 4
     for index, (label, value, delta) in enumerate(metrics):
-        col, row = index % 3, index // 3
+        col, row = index % 4, index // 4
         mx1 = x1 + 22 + col * column_width
         my1 = y1 + 216 + row * 39
         if col:
@@ -309,7 +349,7 @@ def render_progress_card(
     _text_top(
         draw,
         (600, 872),
-        "ДОПОЛНИТЕЛЬНО: SKYBLOCK LEVEL  •  СКОРОСТЬ MINING XP/ЧАС",
+        "ДОПОЛНИТЕЛЬНО: SKYBLOCK LEVEL  •  MINING/HOTM XP В ЧАС  •  ВРЕМЯ ДО УРОВНЯ",
         text_font=font(12, True),
         fill="#72809e",
         align="center",
