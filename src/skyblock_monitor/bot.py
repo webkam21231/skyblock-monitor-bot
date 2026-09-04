@@ -14,10 +14,11 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from .cards import render_progress_card
 from .hypixel import HypixelClient
-from .presentation import MOSCOW, format_report, parse_custom_period
+from .presentation import MOSCOW, parse_custom_period
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class CustomPeriod(StatesGroup):
 
 def main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📈 Все аккаунты", callback_data="all")],
         [InlineKeyboardButton(text="➕ Добавить аккаунт", callback_data="add")],
         [InlineKeyboardButton(text="👥 Мои аккаунты", callback_data="accounts")],
     ])
@@ -55,6 +57,21 @@ def account_keyboard(account_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔄 Обновить сейчас", callback_data=f"refresh:{account_id}")],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete:{account_id}"),
          InlineKeyboardButton(text="⬅️ К аккаунтам", callback_data="accounts")],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def all_accounts_keyboard() -> InlineKeyboardMarkup:
+    periods = [("15 минут", "15m"), ("30 минут", "30m"), ("1 час", "1h"), ("3 часа", "3h"),
+               ("6 часов", "6h"), ("12 часов", "12h"), ("24 часа", "24h"), ("7 дней", "7d"),
+               ("30 дней", "30d")]
+    rows = []
+    for index in range(0, len(periods), 3):
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"period:0:{code}")
+                     for label, code in periods[index:index + 3]])
+    rows.extend([
+        [InlineKeyboardButton(text="🗓 Произвольный период", callback_data="custom:0")],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="home")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -85,6 +102,22 @@ def duration(code: str) -> timedelta:
 async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Мониторинг прогресса Hypixel SkyBlock", reply_markup=main_keyboard())
+
+
+@router.callback_query(F.data == "home")
+async def home(query: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await query.message.answer("Главное меню", reply_markup=main_keyboard())
+    await query.answer()
+
+
+@router.callback_query(F.data == "all")
+async def all_accounts(query: CallbackQuery) -> None:
+    if not store.list_accounts(query.from_user.id):
+        await query.message.answer("Пока нет добавленных аккаунтов.", reply_markup=main_keyboard())
+    else:
+        await query.message.answer("Выбери период для всех аккаунтов:", reply_markup=all_accounts_keyboard())
+    await query.answer()
 
 
 @router.callback_query(F.data == "add")
@@ -145,30 +178,37 @@ async def show_account(query: CallbackQuery) -> None:
     await query.answer()
 
 
-async def send_report(query: CallbackQuery, account_id: int, start_at: datetime, end_at: datetime) -> None:
-    account = store.get_account(account_id, query.from_user.id)
-    if account is None:
-        await query.answer("Аккаунт не найден", show_alert=True)
+async def send_report(message: Message, user_id: int, account_id: int, start_at: datetime, end_at: datetime) -> None:
+    accounts_list = store.list_accounts(user_id) if account_id == 0 else []
+    if account_id != 0:
+        account = store.get_account(account_id, user_id)
+        if account:
+            accounts_list = [account]
+    reports = []
+    for account in accounts_list:
+        report = store.period_report(account.id, start_at, end_at)
+        if report:
+            reports.append((account, report))
+    if not reports:
+        await message.answer("Для этого периода пока недостаточно снимков. Нужно минимум две точки.")
         return
-    report = store.period_report(account.id, start_at, end_at)
-    if report is None:
-        await query.message.answer("Для этого периода пока недостаточно снимков. Нужно минимум две точки.")
-    else:
-        await query.message.answer(format_report(account.username, account.profile_name, report), reply_markup=account_keyboard(account.id))
-    await query.answer()
+    image = render_progress_card(reports)
+    keyboard = all_accounts_keyboard() if account_id == 0 else account_keyboard(account_id)
+    await message.answer_photo(BufferedInputFile(image, filename="skyblock-progress.png"), reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("period:"))
 async def preset_period(query: CallbackQuery) -> None:
     _, account_id, code = query.data.split(":")
     end_at = datetime.now(UTC)
-    await send_report(query, int(account_id), end_at - duration(code), end_at)
+    await send_report(query.message, query.from_user.id, int(account_id), end_at - duration(code), end_at)
+    await query.answer()
 
 
 @router.callback_query(F.data.startswith("custom:"))
 async def custom_begin(query: CallbackQuery, state: FSMContext) -> None:
     account_id = int(query.data.split(":")[1])
-    if store.get_account(account_id, query.from_user.id) is None:
+    if account_id != 0 and store.get_account(account_id, query.from_user.id) is None:
         await query.answer("Аккаунт не найден", show_alert=True)
         return
     await state.set_state(CustomPeriod.value)
@@ -185,15 +225,8 @@ async def custom_value(message: Message, state: FSMContext) -> None:
         await message.answer(str(exc))
         return
     account_id = int((await state.get_data())["account_id"])
-    account = store.get_account(account_id, message.from_user.id)
-    report = store.period_report(account_id, start_at, end_at) if account else None
     await state.clear()
-    if not account:
-        await message.answer("Аккаунт не найден.", reply_markup=main_keyboard())
-    elif report is None:
-        await message.answer("Для этого периода пока недостаточно снимков.", reply_markup=account_keyboard(account_id))
-    else:
-        await message.answer(format_report(account.username, account.profile_name, report), reply_markup=account_keyboard(account_id))
+    await send_report(message, message.from_user.id, account_id, start_at, end_at)
 
 
 @router.callback_query(F.data.startswith("refresh:"))
