@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .models import Account, LiveView, MiningSession, PeriodReport, Snapshot
@@ -69,11 +69,32 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS active_live_views
                     ON live_views(active, telegram_user_id);
+                CREATE TABLE IF NOT EXISTS hypixel_request_budget (
+                    day TEXT PRIMARY KEY,
+                    requests INTEGER NOT NULL DEFAULT 0
+                );
                 """
             )
             columns = {row[1] for row in db.execute("PRAGMA table_info(live_views)")}
             if "current_page" not in columns:
                 db.execute("ALTER TABLE live_views ADD COLUMN current_page INTEGER NOT NULL DEFAULT 0")
+
+    def reserve_hypixel_request(self, at: datetime, daily_limit: int) -> bool:
+        if daily_limit <= 0:
+            return False
+        day = at.astimezone(UTC).date().isoformat()
+        with self._connect() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO hypixel_request_budget(day, requests) VALUES (?, 0)",
+                (day,),
+            )
+            result = db.execute(
+                """UPDATE hypixel_request_budget
+                   SET requests=requests + 1
+                   WHERE day=? AND requests < ?""",
+                (day, daily_limit),
+            )
+        return result.rowcount == 1
 
     def add_account(self, telegram_user_id: int, username: str, uuid: str, profile_name: str) -> Account:
         with self._connect() as db:

@@ -66,3 +66,14 @@ def test_get_account_enforces_owner_and_latest_snapshot(tmp_path):
     assert store.get_account(account.id, 7) == account
     assert store.get_account(account.id, 8) is None
     assert store.latest_snapshot(account.id).mining_xp == 12_000
+
+
+def test_hypixel_daily_budget_is_persistent_and_resets_each_utc_day(tmp_path):
+    path = tmp_path / "bot.db"
+    store = Store(path)
+    first_day = datetime(2026, 9, 6, 23, 59, tzinfo=UTC)
+
+    assert store.reserve_hypixel_request(first_day, daily_limit=2) is True
+    assert Store(path).reserve_hypixel_request(first_day, daily_limit=2) is True
+    assert store.reserve_hypixel_request(first_day, daily_limit=2) is False
+    assert store.reserve_hypixel_request(first_day + timedelta(minutes=2), daily_limit=2) is True

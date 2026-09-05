@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -19,6 +20,10 @@ MINING_XP_COSTS = [
     5_800_000, 6_100_000, 6_400_000, 6_700_000, 7_000_000,
 ]
 HOTM_XP_COSTS = [0, 3_000, 9_000, 25_000, 60_000, 100_000, 150_000, 210_000, 290_000, 400_000]
+
+
+class DailyRequestLimitExceeded(httpx.HTTPError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -81,8 +86,14 @@ def is_skyblock_online(session: dict) -> bool:
 
 
 class HypixelClient:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, reserve_request: Callable[[], bool] | None = None):
         self.headers = {"API-Key": api_key, "User-Agent": "skyblock-monitor-bot/0.1"}
+        self.reserve_request = reserve_request or (lambda: True)
+
+    async def _get(self, client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+        if not self.reserve_request():
+            raise DailyRequestLimitExceeded("Hypixel daily request limit reached")
+        return await client.get(url, **kwargs)
 
     async def resolve_username(self, username: str) -> tuple[str, str]:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -94,8 +105,8 @@ class HypixelClient:
     async def fetch(self, account_id: int, uuid: str, profile_name: str) -> Snapshot:
         async with httpx.AsyncClient(timeout=30, headers=self.headers) as client:
             profiles_response, player_response = await __import__("asyncio").gather(
-                client.get("https://api.hypixel.net/v2/skyblock/profiles", params={"uuid": uuid}),
-                client.get("https://api.hypixel.net/v2/player", params={"uuid": uuid}),
+                self._get(client, "https://api.hypixel.net/v2/skyblock/profiles", params={"uuid": uuid}),
+                self._get(client, "https://api.hypixel.net/v2/player", params={"uuid": uuid}),
             )
         profiles_response.raise_for_status()
         player_response.raise_for_status()
@@ -110,6 +121,6 @@ class HypixelClient:
 
     async def fetch_status(self, uuid: str) -> dict:
         async with httpx.AsyncClient(timeout=20, headers=self.headers) as client:
-            response = await client.get("https://api.hypixel.net/v2/status", params={"uuid": uuid})
+            response = await self._get(client, "https://api.hypixel.net/v2/status", params={"uuid": uuid})
         response.raise_for_status()
         return response.json().get("session") or {"online": False}

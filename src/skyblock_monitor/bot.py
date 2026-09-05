@@ -34,6 +34,8 @@ log = logging.getLogger(__name__)
 router = Router()
 store: Store
 hypixel: HypixelClient
+DEFAULT_DAILY_REQUEST_LIMIT = 2_400
+DEFAULT_POLL_INTERVAL_SECONDS = 240
 
 
 class AddAccount(StatesGroup):
@@ -567,6 +569,7 @@ async def delete(query: CallbackQuery) -> None:
 
 
 async def poll_forever() -> None:
+    interval = int(os.environ.get("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS))
     while True:
         started = datetime.now(UTC)
         for account in store.list_accounts():
@@ -582,7 +585,7 @@ async def poll_forever() -> None:
             except httpx.HTTPError:
                 log.exception("Failed to update online status for %s", account.username)
         elapsed = (datetime.now(UTC) - started).total_seconds()
-        await asyncio.sleep(max(1, 60 - elapsed))
+        await asyncio.sleep(max(1, interval - elapsed))
 
 
 async def live_forever(bot: Bot) -> None:
@@ -603,10 +606,14 @@ async def live_forever(bot: Bot) -> None:
 async def run() -> None:
     global store, hypixel
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    hypixel = HypixelClient(os.environ["HYPIXEL_API_KEY"])
     db_path = Path(os.environ.get("DATABASE_PATH", "data/monitor.db"))
     db_path.parent.mkdir(parents=True, exist_ok=True)
     store = Store(db_path)
+    daily_limit = int(os.environ.get("HYPIXEL_DAILY_REQUEST_LIMIT", DEFAULT_DAILY_REQUEST_LIMIT))
+    hypixel = HypixelClient(
+        os.environ["HYPIXEL_API_KEY"],
+        reserve_request=lambda: store.reserve_hypixel_request(datetime.now(UTC), daily_limit),
+    )
     bot = Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.include_router(router)

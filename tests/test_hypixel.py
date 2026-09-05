@@ -1,6 +1,13 @@
+import asyncio
+
+import pytest
+
+from skyblock_monitor.bot import DEFAULT_POLL_INTERVAL_SECONDS
 from skyblock_monitor.hypixel import (
     HOTM_XP_COSTS,
     MINING_XP_COSTS,
+    DailyRequestLimitExceeded,
+    HypixelClient,
     extract_snapshot,
     is_skyblock_online,
     level_progress,
@@ -73,3 +80,15 @@ def test_hotm_progress_returns_remaining_xp_and_percent():
     assert progress.next_level == 5
     assert progress.remaining == 38_235
     assert progress.percent == 36.3
+    assert progress.remaining_percent == 63.7
+
+
+def test_client_stops_before_http_when_daily_budget_is_exhausted():
+    client = HypixelClient("secret", reserve_request=lambda: False)
+
+    with pytest.raises(DailyRequestLimitExceeded):
+        asyncio.run(client.fetch_status("uuid"))
+
+
+def test_default_polling_leaves_headroom_below_2400_requests_per_day():
+    assert DEFAULT_POLL_INTERVAL_SECONDS == 240
