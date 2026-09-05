@@ -1,5 +1,9 @@
+import asyncio
 from datetime import UTC, datetime
 
+import pytest
+
+import skyblock_monitor.bot as bot_module
 from skyblock_monitor.bot import (
     account_keyboard,
     all_accounts_keyboard,
@@ -51,6 +55,39 @@ def test_live_caption_shows_refresh_time():
     now = datetime(2026, 9, 4, 19, 12, tzinfo=UTC)
 
     assert "обновлено 04.09 22:12 МСК" in live_caption(view, now, live=True)
+    assert "Обновление каждые 4 минуты" in live_caption(view, now, live=True)
+
+
+def test_poll_cycle_refreshes_live_view_after_snapshots(monkeypatch):
+    view = LiveView(1, 7, 100, 200, 0, datetime(2026, 9, 4, 19, 10, tzinfo=UTC))
+    refreshed = []
+
+    class FakeStore:
+        @staticmethod
+        def list_accounts():
+            return []
+
+        @staticmethod
+        def list_active_live_views():
+            return [view]
+
+    class StopPolling(Exception):
+        pass
+
+    async def fake_update(_bot, active_view):
+        refreshed.append(active_view.id)
+
+    async def stop_sleep(_seconds):
+        raise StopPolling
+
+    monkeypatch.setattr(bot_module, "store", FakeStore(), raising=False)
+    monkeypatch.setattr(bot_module, "update_live_message", fake_update)
+    monkeypatch.setattr(bot_module.asyncio, "sleep", stop_sleep)
+
+    with pytest.raises(StopPolling):
+        asyncio.run(bot_module.poll_forever(object()))
+
+    assert refreshed == [view.id]
 
 
 def test_not_modified_error_does_not_end_live_view():

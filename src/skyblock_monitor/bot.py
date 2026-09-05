@@ -271,7 +271,7 @@ def live_caption(view: LiveView, now: datetime, *, live: bool) -> str:
     updated = now.astimezone(MOSCOW).strftime("%d.%m %H:%M")
     return (
         f"🔴 <b>Прямой эфир</b> · старт {started} МСК\n"
-        f"Обновление каждые 2 минуты · обновлено {updated} МСК"
+        f"Обновление каждые 4 минуты · обновлено {updated} МСК"
     )
 
 
@@ -568,7 +568,7 @@ async def delete(query: CallbackQuery) -> None:
     await query.answer()
 
 
-async def poll_forever() -> None:
+async def poll_forever(bot: Bot) -> None:
     interval = int(os.environ.get("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS))
     while True:
         started = datetime.now(UTC)
@@ -584,13 +584,6 @@ async def poll_forever() -> None:
                 store.record_presence(account.id, is_skyblock_online(status), snapshot.observed_at)
             except httpx.HTTPError:
                 log.exception("Failed to update online status for %s", account.username)
-        elapsed = (datetime.now(UTC) - started).total_seconds()
-        await asyncio.sleep(max(1, interval - elapsed))
-
-
-async def live_forever(bot: Bot) -> None:
-    while True:
-        await asyncio.sleep(120)
         for view in store.list_active_live_views():
             try:
                 await update_live_message(bot, view)
@@ -601,6 +594,8 @@ async def live_forever(bot: Bot) -> None:
                 store.stop_live_view(view.id)
             except Exception:
                 log.exception("Failed to update live view %s", view.id)
+        elapsed = (datetime.now(UTC) - started).total_seconds()
+        await asyncio.sleep(max(1, interval - elapsed))
 
 
 async def run() -> None:
@@ -617,13 +612,11 @@ async def run() -> None:
     bot = Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.include_router(router)
-    poller = asyncio.create_task(poll_forever())
-    live_updater = asyncio.create_task(live_forever(bot))
+    poller = asyncio.create_task(poll_forever(bot))
     try:
         await dispatcher.start_polling(bot)
     finally:
         poller.cancel()
-        live_updater.cancel()
         await bot.session.close()
 
 
